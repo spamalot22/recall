@@ -43,8 +43,8 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
@@ -61,8 +61,8 @@ jobs:
     needs: [version, server-check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -103,7 +103,7 @@ jobs:
             --dart-define=APP_VERSION=${{ github.ref_name }}
       - name: Prepare release asset
         run: mv app/build/app/outputs/flutter-apk/app-release.apk recall-android-${{ github.ref_name }}.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: recall-release-apk
           path: recall-android-${{ github.ref_name }}.apk
