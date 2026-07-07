@@ -50,3 +50,14 @@ flutter run
 ```
 
 The first app target is Android.
+
+## Releases
+
+CI runs on pushes to `main` and pull requests. Android APK publishing only runs when a bare semantic version tag is pushed:
+
+```bash
+git tag 1.1.1
+git push origin 1.1.1
+```
+
+Tags such as `v1.1.1` or `1.1.1-beta.1` do not publish.
