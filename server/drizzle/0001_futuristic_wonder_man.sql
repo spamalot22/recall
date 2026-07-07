@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "encrypted_records_user_revision_unique" ON "encrypted_records" USING btree ("user_id","server_revision");
