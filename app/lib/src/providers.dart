@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'data/local_database.dart';
 import 'notes/note_models.dart';
 import 'notes/notes_repository.dart';
+import 'reminders/reminder_scheduler.dart';
 import 'updates/apk_installer.dart';
 import 'updates/update_service.dart';
 
@@ -26,4 +27,8 @@ final updateServiceProvider = Provider<UpdateService>((ref) {
 
 final apkInstallerProvider = Provider<ApkInstaller>((ref) {
   return const ApkInstaller();
+});
+
+final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
+  return ReminderScheduler();
 });

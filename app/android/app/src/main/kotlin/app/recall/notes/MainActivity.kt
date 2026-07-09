@@ -12,9 +12,11 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.security.MessageDigest
+import java.util.TimeZone
 
 class MainActivity : FlutterActivity() {
     private val apkInstallerChannel = "app.recall.notes/apk_installer"
+    private val deviceChannel = "app.recall.notes/device"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -36,6 +38,13 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, deviceChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "localTimezone" -> result.success(TimeZone.getDefault().id)
                 else -> result.notImplemented()
             }
         }

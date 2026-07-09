@@ -475,6 +475,7 @@ Future<void> _confirmMoveNoteToTrash(
   }
 
   await ref.read(notesRepositoryProvider).moveNoteToTrash(note.id);
+  await ref.read(reminderSchedulerProvider).cancelNoteReminder(note.id);
 
   if (context.mounted) {
     _showSnackBar(context, 'Note moved to trash.');
@@ -514,12 +515,12 @@ Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) {
                     ? null
                     : () async {
                         setSheetState(() => checkingForUpdates = true);
-                        await _checkForUpdatesManually(
+                        final sheetClosed = await _checkForUpdatesManually(
                           context,
                           sheetContext,
                           ref,
                         );
-                        if (sheetContext.mounted) {
+                        if (!sheetClosed && sheetContext.mounted) {
                           setSheetState(() => checkingForUpdates = false);
                         }
                       },
@@ -532,7 +533,7 @@ Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) {
   );
 }
 
-Future<void> _checkForUpdatesManually(
+Future<bool> _checkForUpdatesManually(
   BuildContext rootContext,
   BuildContext sheetContext,
   WidgetRef ref,
@@ -540,24 +541,34 @@ Future<void> _checkForUpdatesManually(
   try {
     final update = await ref.read(updateServiceProvider).checkForUpdate();
     if (!rootContext.mounted || !sheetContext.mounted) {
-      return;
+      return false;
     }
 
     if (!update.updateAvailable) {
+      Navigator.of(sheetContext).pop();
       _showSnackBar(rootContext, 'Recall is up to date.');
-      return;
+      return true;
     }
 
     Navigator.of(sheetContext).pop();
     await _showUpdateAvailableDialog(rootContext, ref, update);
+    return true;
   } on UpdateException catch (error) {
+    if (sheetContext.mounted) {
+      Navigator.of(sheetContext).pop();
+    }
     if (rootContext.mounted) {
       _showSnackBar(rootContext, error.message);
     }
+    return true;
   } on Object {
+    if (sheetContext.mounted) {
+      Navigator.of(sheetContext).pop();
+    }
     if (rootContext.mounted) {
       _showSnackBar(rootContext, 'Could not check for updates.');
     }
+    return true;
   }
 }
 
@@ -946,14 +957,21 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       return;
     }
 
-    setState(() => _saving = true);
-
     final reminder = _reminderAt == null
         ? null
         : NoteReminder(nextFireAt: _reminderAt!, recurrence: _recurrence);
+    if (reminder != null &&
+        !reminder.repeats &&
+        !reminder.nextFireAt.isAfter(DateTime.now())) {
+      _showSnackBar(context, 'Choose a future reminder time.');
+      return;
+    }
+
+    setState(() => _saving = true);
 
     try {
       final repository = ref.read(notesRepositoryProvider);
+      final scheduler = ref.read(reminderSchedulerProvider);
       if (_editing) {
         await repository.updateTextNote(
           id: widget.noteId!,
@@ -961,12 +979,30 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           body: body,
           reminder: reminder,
         );
+        if (reminder == null) {
+          await scheduler.cancelNoteReminder(widget.noteId!);
+        } else {
+          await scheduler.scheduleNoteReminder(
+            noteId: widget.noteId!,
+            title: title,
+            body: body,
+            reminder: reminder,
+          );
+        }
       } else {
-        await repository.createTextNote(
+        final noteId = await repository.createTextNote(
           title: title,
           body: body,
           reminder: reminder,
         );
+        if (reminder != null) {
+          await scheduler.scheduleNoteReminder(
+            noteId: noteId,
+            title: title,
+            body: body,
+            reminder: reminder,
+          );
+        }
       }
 
       if (mounted) {
