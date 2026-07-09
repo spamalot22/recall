@@ -14,18 +14,23 @@ class NotesRepository {
     final query = _db.select(_db.notes)
       ..where((note) => note.trashedAt.isNull() & note.isArchived.equals(false))
       ..orderBy([
-        (note) => OrderingTerm(expression: note.isPinned, mode: OrderingMode.desc),
-        (note) => OrderingTerm(expression: note.updatedAt, mode: OrderingMode.desc),
+        (note) =>
+            OrderingTerm(expression: note.isPinned, mode: OrderingMode.desc),
+        (note) =>
+            OrderingTerm(expression: note.updatedAt, mode: OrderingMode.desc),
       ]);
 
     return query.watch().asyncMap((notes) async {
       final previews = <NotePreview>[];
 
       for (final note in notes) {
-        final checklistItems = await (_db.select(_db.checklistItems)
-              ..where((item) => item.noteId.equals(note.id))
-              ..orderBy([(item) => OrderingTerm(expression: item.sortOrder)]))
-            .get();
+        final checklistItems =
+            await (_db.select(_db.checklistItems)
+                  ..where((item) => item.noteId.equals(note.id))
+                  ..orderBy([
+                    (item) => OrderingTerm(expression: item.sortOrder),
+                  ]))
+                .get();
 
         previews.add(
           NotePreview(
@@ -36,10 +41,8 @@ class NotesRepository {
             reminderLabel: 'No reminder',
             checklistItems: checklistItems
                 .map(
-                  (item) => ChecklistItemPreview(
-                    item.content,
-                    done: item.isDone,
-                  ),
+                  (item) =>
+                      ChecklistItemPreview(item.content, done: item.isDone),
                 )
                 .toList(),
             pinned: note.isPinned,
@@ -59,7 +62,9 @@ class NotesRepository {
     final trimmedTitle = title.trim();
     final trimmedBody = body.trim();
 
-    await _db.into(_db.notes).insert(
+    await _db
+        .into(_db.notes)
+        .insert(
           NotesCompanion.insert(
             id: _uuid.v7(),
             title: Value(trimmedTitle),
@@ -72,14 +77,25 @@ class NotesRepository {
         );
   }
 
+  Future<void> moveNoteToTrash(String noteId) async {
+    final now = DateTime.now().toUtc();
+
+    await (_db.update(_db.notes)..where((note) => note.id.equals(noteId)))
+        .write(NotesCompanion(trashedAt: Value(now), updatedAt: Value(now)));
+  }
+
   ColorMood _defaultMoodFor(String title, String body) {
     final text = '$title $body'.toLowerCase();
 
-    if (text.contains('today') || text.contains('urgent') || text.contains('asap')) {
+    if (text.contains('today') ||
+        text.contains('urgent') ||
+        text.contains('asap')) {
       return ColorMood.urgent;
     }
 
-    if (text.contains('buy') || text.contains('pick up') || text.contains('pack')) {
+    if (text.contains('buy') ||
+        text.contains('pick up') ||
+        text.contains('pack')) {
       return ColorMood.errand;
     }
 

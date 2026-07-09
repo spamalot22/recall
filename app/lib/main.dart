@@ -260,13 +260,15 @@ class ErrorState extends StatelessWidget {
   }
 }
 
-class NoteCard extends StatelessWidget {
+enum _NoteCardAction { delete }
+
+class NoteCard extends ConsumerWidget {
   const NoteCard({super.key, required this.note});
 
   final NotePreview note;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final colors = note.mood.resolve(Theme.of(context).brightness);
 
@@ -299,6 +301,34 @@ class NoteCard extends StatelessWidget {
                       size: 18,
                       color: colors.accent,
                     ),
+                  SizedBox.square(
+                    dimension: 32,
+                    child: PopupMenuButton<_NoteCardAction>(
+                      tooltip: 'Note actions',
+                      padding: EdgeInsets.zero,
+                      iconSize: 20,
+                      icon: Icon(
+                        Icons.more_vert_rounded,
+                        color: colors.foreground,
+                      ),
+                      onSelected: (action) async {
+                        switch (action) {
+                          case _NoteCardAction.delete:
+                            await _confirmMoveNoteToTrash(context, ref, note);
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: _NoteCardAction.delete,
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.delete_outline_rounded),
+                            title: Text('Delete'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -370,19 +400,21 @@ class ChecklistPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final visibleItems = items.take(2).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final item in items.take(3))
+        for (final item in visibleItems)
           Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.only(bottom: 4),
             child: Row(
               children: [
                 Icon(
                   item.done
                       ? Icons.check_circle_rounded
                       : Icons.radio_button_unchecked_rounded,
-                  size: 18,
+                  size: 16,
                   color: item.done ? accent : foreground.withValues(alpha: 0.7),
                 ),
                 const SizedBox(width: 8),
@@ -400,8 +432,52 @@ class ChecklistPreview extends StatelessWidget {
               ],
             ),
           ),
+        if (items.length > visibleItems.length)
+          Text(
+            '+${items.length - visibleItems.length} more',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: foreground.withValues(alpha: 0.7),
+            ),
+          ),
       ],
     );
+  }
+}
+
+Future<void> _confirmMoveNoteToTrash(
+  BuildContext context,
+  WidgetRef ref,
+  NotePreview note,
+) async {
+  final shouldDelete = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Delete note?'),
+      content: Text('"${note.title}" will be moved to trash.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: () => Navigator.of(context).pop(true),
+          icon: const Icon(Icons.delete_outline_rounded),
+          label: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+
+  if (shouldDelete != true || !context.mounted) {
+    return;
+  }
+
+  await ref.read(notesRepositoryProvider).moveNoteToTrash(note.id);
+
+  if (context.mounted) {
+    _showSnackBar(context, 'Note moved to trash.');
   }
 }
 

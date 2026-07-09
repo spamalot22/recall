@@ -30,4 +30,22 @@ void main() {
     expect(notes.single.body, 'Pick up the right size');
     expect(notes.single.mood, ColorMood.errand);
   });
+
+  test('moves notes to trash so they leave the home preview list', () async {
+    await repository.createTextNote(
+      title: 'Delete me',
+      body: 'This should not stay visible',
+    );
+
+    final created = await repository.watchNotePreviews().first;
+    expect(created, hasLength(1));
+
+    await repository.moveNoteToTrash(created.single.id);
+
+    final visible = await repository.watchNotePreviews().first;
+    final stored = await database.select(database.notes).getSingle();
+
+    expect(visible, isEmpty);
+    expect(stored.trashedAt, isNotNull);
+  });
 }
