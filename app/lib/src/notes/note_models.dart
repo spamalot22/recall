@@ -22,6 +22,56 @@ class NotePreview {
   final bool recurring;
 }
 
+class NoteEditorSnapshot {
+  const NoteEditorSnapshot({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.mood,
+    this.reminder,
+  });
+
+  final String id;
+  final String title;
+  final String body;
+  final ColorMood mood;
+  final NoteReminder? reminder;
+}
+
+class NoteReminder {
+  const NoteReminder({required this.nextFireAt, required this.recurrence});
+
+  final DateTime nextFireAt;
+  final ReminderRecurrence recurrence;
+
+  bool get repeats => recurrence != ReminderRecurrence.none;
+}
+
+enum ReminderRecurrence {
+  none,
+  daily,
+  weekly,
+  monthly,
+  yearly;
+
+  String get label {
+    return switch (this) {
+      ReminderRecurrence.none => 'Once',
+      ReminderRecurrence.daily => 'Daily',
+      ReminderRecurrence.weekly => 'Weekly',
+      ReminderRecurrence.monthly => 'Monthly',
+      ReminderRecurrence.yearly => 'Yearly',
+    };
+  }
+
+  static ReminderRecurrence fromName(String name) {
+    return ReminderRecurrence.values.firstWhere(
+      (recurrence) => recurrence.name == name,
+      orElse: () => ReminderRecurrence.none,
+    );
+  }
+}
+
 class ChecklistItemPreview {
   const ChecklistItemPreview(this.text, {this.done = false});
 
@@ -53,30 +103,30 @@ enum ColorMood {
 
     return switch (this) {
       ColorMood.clear => MoodColors(
-          background: dark ? const Color(0xFF20252A) : const Color(0xFFF6F7F4),
-          foreground: dark ? const Color(0xFFE6E8E2) : const Color(0xFF202326),
-          accent: const Color(0xFF5A8F82),
-        ),
+        background: dark ? const Color(0xFF20252A) : const Color(0xFFF6F7F4),
+        foreground: dark ? const Color(0xFFE6E8E2) : const Color(0xFF202326),
+        accent: const Color(0xFF5A8F82),
+      ),
       ColorMood.focus => MoodColors(
-          background: dark ? const Color(0xFF1D2C30) : const Color(0xFFE8F2ED),
-          foreground: dark ? const Color(0xFFE3F0ED) : const Color(0xFF1F3435),
-          accent: const Color(0xFF2E7D74),
-        ),
+        background: dark ? const Color(0xFF1D2C30) : const Color(0xFFE8F2ED),
+        foreground: dark ? const Color(0xFFE3F0ED) : const Color(0xFF1F3435),
+        accent: const Color(0xFF2E7D74),
+      ),
       ColorMood.urgent => MoodColors(
-          background: dark ? const Color(0xFF3B2526) : const Color(0xFFFFE8E3),
-          foreground: dark ? const Color(0xFFF8E4DF) : const Color(0xFF3F2420),
-          accent: const Color(0xFFC64E3C),
-        ),
+        background: dark ? const Color(0xFF3B2526) : const Color(0xFFFFE8E3),
+        foreground: dark ? const Color(0xFFF8E4DF) : const Color(0xFF3F2420),
+        accent: const Color(0xFFC64E3C),
+      ),
       ColorMood.routine => MoodColors(
-          background: dark ? const Color(0xFF2C273A) : const Color(0xFFF0EBFF),
-          foreground: dark ? const Color(0xFFEAE4FA) : const Color(0xFF30294A),
-          accent: const Color(0xFF7453B6),
-        ),
+        background: dark ? const Color(0xFF2C273A) : const Color(0xFFF0EBFF),
+        foreground: dark ? const Color(0xFFEAE4FA) : const Color(0xFF30294A),
+        accent: const Color(0xFF7453B6),
+      ),
       ColorMood.errand => MoodColors(
-          background: dark ? const Color(0xFF303123) : const Color(0xFFFFF3C8),
-          foreground: dark ? const Color(0xFFF1ECCD) : const Color(0xFF383514),
-          accent: const Color(0xFF90731B),
-        ),
+        background: dark ? const Color(0xFF303123) : const Color(0xFFFFF3C8),
+        foreground: dark ? const Color(0xFFF1ECCD) : const Color(0xFF383514),
+        accent: const Color(0xFF90731B),
+      ),
     };
   }
 

@@ -23,4 +23,25 @@ void main() {
     expect(find.text('Monthly filter order'), findsOneWidget);
     expect(find.byIcon(Icons.add_rounded), findsOneWidget);
   });
+
+  testWidgets('FAB opens the note editor with reminder controls', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          notePreviewsProvider.overrideWith((ref) => Stream.value(sampleNotes)),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New note'), findsOneWidget);
+    expect(find.text('Add reminder'), findsOneWidget);
+    expect(find.text('Save'), findsOneWidget);
+  });
 }

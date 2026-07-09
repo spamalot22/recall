@@ -127,7 +127,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showCreateNoteDialog(context, ref),
+        onPressed: () => _openNoteEditor(context),
         icon: const Icon(Icons.add_rounded),
         label: const Text('Note'),
       ),
@@ -276,7 +276,7 @@ class NoteCard extends ConsumerWidget {
       color: colors.background,
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTap: () {},
+        onTap: () => _openNoteEditor(context, noteId: note.id),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -728,54 +728,265 @@ void _showSnackBar(BuildContext context, String message) {
     ..showSnackBar(SnackBar(content: Text(message)));
 }
 
-Future<void> _showCreateNoteDialog(BuildContext context, WidgetRef ref) async {
-  final titleController = TextEditingController();
-  final bodyController = TextEditingController();
+Future<void> _openNoteEditor(BuildContext context, {String? noteId}) {
+  return Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => NoteEditorPage(noteId: noteId),
+    ),
+  );
+}
 
-  final shouldCreate = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('New note'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: titleController,
-            decoration: const InputDecoration(labelText: 'Title'),
-            autofocus: true,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: bodyController,
-            decoration: const InputDecoration(labelText: 'Note'),
-            minLines: 3,
-            maxLines: 5,
+class NoteEditorPage extends ConsumerStatefulWidget {
+  const NoteEditorPage({super.key, this.noteId});
+
+  final String? noteId;
+
+  @override
+  ConsumerState<NoteEditorPage> createState() => _NoteEditorPageState();
+}
+
+class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
+  final _titleController = TextEditingController();
+  final _bodyController = TextEditingController();
+
+  DateTime? _reminderAt;
+  ReminderRecurrence _recurrence = ReminderRecurrence.none;
+  bool _loading = false;
+  bool _saving = false;
+  bool _missing = false;
+
+  bool get _editing => widget.noteId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_editing) {
+      _loadNote();
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadNote() async {
+    setState(() => _loading = true);
+    final note = await ref
+        .read(notesRepositoryProvider)
+        .loadNoteForEditing(widget.noteId!);
+
+    if (!mounted) {
+      return;
+    }
+
+    if (note == null) {
+      setState(() {
+        _loading = false;
+        _missing = true;
+      });
+      return;
+    }
+
+    _titleController.text = note.title;
+    _bodyController.text = note.body;
+    setState(() {
+      _reminderAt = note.reminder?.nextFireAt;
+      _recurrence = note.reminder?.recurrence ?? ReminderRecurrence.none;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_editing ? 'Edit note' : 'New note'),
+        actions: [
+          TextButton(
+            onPressed: _saving || _loading || _missing ? null : _save,
+            child: _saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Save'),
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Create'),
-        ),
-      ],
-    ),
-  );
-
-  final title = titleController.text;
-  final body = bodyController.text;
-  titleController.dispose();
-  bodyController.dispose();
-
-  if (shouldCreate != true || (title.trim().isEmpty && body.trim().isEmpty)) {
-    return;
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _missing
+            ? const Center(child: Text('This note is no longer available.'))
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                children: [
+                  TextField(
+                    controller: _titleController,
+                    autofocus: !_editing,
+                    textCapitalization: TextCapitalization.sentences,
+                    style: textTheme.headlineSmall,
+                    decoration: const InputDecoration(
+                      hintText: 'Title',
+                      border: InputBorder.none,
+                      filled: false,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _bodyController,
+                    textCapitalization: TextCapitalization.sentences,
+                    minLines: 8,
+                    maxLines: 18,
+                    decoration: const InputDecoration(
+                      hintText: 'Note',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text('Reminder', style: textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.notifications_none_rounded),
+                    title: const Text('Add reminder'),
+                    value: _reminderAt != null,
+                    onChanged: (enabled) {
+                      setState(() {
+                        if (enabled) {
+                          _reminderAt = _defaultReminderTime();
+                        } else {
+                          _reminderAt = null;
+                          _recurrence = ReminderRecurrence.none;
+                        }
+                      });
+                    },
+                  ),
+                  if (_reminderAt != null) ...[
+                    const SizedBox(height: 8),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.schedule_rounded),
+                      title: const Text('Date and time'),
+                      subtitle: Text(_formatEditorDateTime(_reminderAt!)),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: _pickReminderDateTime,
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<ReminderRecurrence>(
+                      initialValue: _recurrence,
+                      decoration: const InputDecoration(
+                        labelText: 'Repeat',
+                        prefixIcon: Icon(Icons.event_repeat_rounded),
+                      ),
+                      items: [
+                        for (final recurrence in ReminderRecurrence.values)
+                          DropdownMenuItem(
+                            value: recurrence,
+                            child: Text(recurrence.label),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _recurrence = value);
+                        }
+                      },
+                    ),
+                  ],
+                ],
+              ),
+      ),
+    );
   }
 
-  await ref
-      .read(notesRepositoryProvider)
-      .createTextNote(title: title, body: body);
+  Future<void> _pickReminderDateTime() async {
+    final initial = _reminderAt ?? _defaultReminderTime();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 3650)),
+    );
+
+    if (date == null || !mounted) {
+      return;
+    }
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+
+    if (time == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _reminderAt = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
+  }
+
+  Future<void> _save() async {
+    final title = _titleController.text;
+    final body = _bodyController.text;
+    if (title.trim().isEmpty && body.trim().isEmpty) {
+      _showSnackBar(context, 'Add a title or note before saving.');
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    final reminder = _reminderAt == null
+        ? null
+        : NoteReminder(nextFireAt: _reminderAt!, recurrence: _recurrence);
+
+    try {
+      final repository = ref.read(notesRepositoryProvider);
+      if (_editing) {
+        await repository.updateTextNote(
+          id: widget.noteId!,
+          title: title,
+          body: body,
+          reminder: reminder,
+        );
+      } else {
+        await repository.createTextNote(
+          title: title,
+          body: body,
+          reminder: reminder,
+        );
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  DateTime _defaultReminderTime() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, now.hour + 1);
+  }
+}
+
+String _formatEditorDateTime(DateTime dateTime) {
+  final hour = dateTime.hour.toString().padLeft(2, '0');
+  final minute = dateTime.minute.toString().padLeft(2, '0');
+  return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} $hour:$minute';
 }

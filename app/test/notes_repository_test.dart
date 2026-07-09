@@ -48,4 +48,60 @@ void main() {
     expect(visible, isEmpty);
     expect(stored.trashedAt, isNotNull);
   });
+
+  test(
+    'creates notes with reminders and shows recurrence in previews',
+    () async {
+      await repository.createTextNote(
+        title: 'Water plants',
+        body: 'Use the small can',
+        reminder: NoteReminder(
+          nextFireAt: DateTime(2026, 7, 10, 9),
+          recurrence: ReminderRecurrence.weekly,
+        ),
+      );
+
+      final notes = await repository.watchNotePreviews().first;
+      final reminders = await database.select(database.reminders).get();
+
+      expect(notes, hasLength(1));
+      expect(notes.single.recurring, isTrue);
+      expect(notes.single.reminderLabel, contains('Weekly'));
+      expect(reminders, hasLength(1));
+      expect(reminders.single.recurrenceKind, ReminderRecurrence.weekly.name);
+    },
+  );
+
+  test('loads and updates editable note content and reminder', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Draft',
+      body: 'Old body',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 7, 10, 9),
+        recurrence: ReminderRecurrence.none,
+      ),
+    );
+
+    final loaded = await repository.loadNoteForEditing(noteId);
+    expect(loaded?.title, 'Draft');
+    expect(loaded?.reminder?.recurrence, ReminderRecurrence.none);
+
+    await repository.updateTextNote(
+      id: noteId,
+      title: 'Updated',
+      body: 'New body',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 7, 11, 10, 30),
+        recurrence: ReminderRecurrence.daily,
+      ),
+    );
+
+    final updated = await repository.loadNoteForEditing(noteId);
+    final reminders = await database.select(database.reminders).get();
+
+    expect(updated?.title, 'Updated');
+    expect(updated?.body, 'New body');
+    expect(updated?.reminder?.recurrence, ReminderRecurrence.daily);
+    expect(reminders, hasLength(1));
+  });
 }
