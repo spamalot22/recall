@@ -130,5 +130,6 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             "recall-android-${{ github.ref_name }}.apk" \
+            --repo "${{ github.repository }}" \
             --title "Recall ${{ github.ref_name }}" \
             --generate-notes
