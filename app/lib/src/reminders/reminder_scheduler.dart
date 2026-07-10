@@ -76,6 +76,30 @@ class ReminderScheduler {
     await _notifications.cancel(id: notificationIdForNote(noteId));
   }
 
+  Future<void> reconcileNoteReminders(
+    List<ScheduledNoteReminder> schedules,
+  ) async {
+    await _ensureInitialized();
+    final desiredIds = schedules
+        .map((schedule) => notificationIdForNote(schedule.noteId))
+        .toSet();
+    final pending = await _notifications.pendingNotificationRequests();
+    for (final notification in pending) {
+      if (notification.payload != null &&
+          !desiredIds.contains(notification.id)) {
+        await _notifications.cancel(id: notification.id);
+      }
+    }
+    for (final schedule in schedules) {
+      await scheduleNoteReminder(
+        noteId: schedule.noteId,
+        title: schedule.title,
+        body: schedule.body,
+        reminder: schedule.reminder,
+      );
+    }
+  }
+
   int notificationIdForNote(String noteId) {
     var hash = 0x811c9dc5;
     for (final codeUnit in noteId.codeUnits) {

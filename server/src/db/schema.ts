@@ -5,6 +5,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -87,6 +88,7 @@ export const keyBundles = pgTable(
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     passwordWrappedMasterKey: text("password_wrapped_master_key").notNull(),
     recoveryWrappedMasterKey: text("recovery_wrapped_master_key").notNull(),
+    recoveryVerifier: text("recovery_verifier"),
     kdfParams: jsonb("kdf_params").notNull(),
     version: integer("version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -100,7 +102,7 @@ export const keyBundles = pgTable(
 export const encryptedRecords = pgTable(
   "encrypted_records",
   {
-    id: uuid("id").primaryKey(),
+    id: uuid("id").notNull(),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     type: encryptedRecordType("type").notNull(),
     encryptedPayload: text("encrypted_payload").notNull(),
@@ -114,6 +116,10 @@ export const encryptedRecords = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
+    primaryKey: primaryKey({
+      columns: [table.userId, table.id],
+      name: "encrypted_records_user_id_id_pk"
+    }),
     userRevisionUnique: uniqueIndex("encrypted_records_user_revision_unique").on(table.userId, table.serverRevision),
     userRevisionIdx: index("encrypted_records_user_revision_idx").on(table.userId, table.serverRevision),
     userTypeIdx: index("encrypted_records_user_type_idx").on(table.userId, table.type)

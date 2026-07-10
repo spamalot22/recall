@@ -8,10 +8,18 @@ plugins {
 }
 
 // Release signing config is read from android/key.properties (gitignored). The
-// release workflow writes it from CI secrets. When absent, release builds fall
-// back to debug signing so local development and PR builds still work.
+// release workflow writes it from CI secrets. Release builds fail closed when
+// it is absent; debug development builds do not require it.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
+val isReleaseBuild = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (isReleaseBuild && !keystorePropertiesFile.exists()) {
+    throw GradleException(
+        "Release signing is not configured. Add android/key.properties before building a release APK."
+    )
+}
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
@@ -51,11 +59,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (keystorePropertiesFile.exists()) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

@@ -8,7 +8,7 @@ import { auditEvents, encryptedRecords, syncCursors } from "../db/schema.js";
 const encryptedRecordSchema = z.object({
   id: z.string().uuid(),
   type: z.enum(["note", "checklist_item", "reminder", "reminder_occurrence", "tombstone"]),
-  encryptedPayload: z.string().min(1),
+  encryptedPayload: z.string().min(1).max(700_000),
   payloadVersion: z.number().int().positive().default(1),
   clientRevision: z.number().int().nonnegative(),
   baseServerRevision: z.number().int().nonnegative().optional(),
@@ -16,7 +16,7 @@ const encryptedRecordSchema = z.object({
 });
 
 const pushSchema = z.object({
-  records: z.array(encryptedRecordSchema).max(250)
+  records: z.array(encryptedRecordSchema).min(1).max(250)
 });
 
 const pullSchema = z.object({
@@ -49,10 +49,10 @@ export async function syncRoutes(app: FastifyInstance) {
           .where(and(eq(encryptedRecords.id, record.id), eq(encryptedRecords.userId, userId)))
           .limit(1);
 
-        const serverRevision = nextServerRevision++;
         const deletedAt = record.deletedAt ? new Date(record.deletedAt) : null;
 
         if (!existing) {
+          const serverRevision = nextServerRevision++;
           const [inserted] = await tx
             .insert(encryptedRecords)
             .values({
@@ -78,6 +78,7 @@ export async function syncRoutes(app: FastifyInstance) {
         }
 
         if (record.baseServerRevision === existing.serverRevision) {
+          const serverRevision = nextServerRevision++;
           const [updated] = await tx
             .update(encryptedRecords)
             .set({
@@ -103,28 +104,46 @@ export async function syncRoutes(app: FastifyInstance) {
         }
 
         const conflictRecordId = randomUUID();
+        const conflictServerRevision = nextServerRevision++;
         const [conflict] = await tx
           .insert(encryptedRecords)
           .values({
             id: conflictRecordId,
             userId,
+            type: existing.type,
+            encryptedPayload: existing.encryptedPayload,
+            payloadVersion: existing.payloadVersion,
+            clientRevision: existing.clientRevision,
+            serverRevision: conflictServerRevision,
+            sourceDeviceId: existing.sourceDeviceId,
+            conflictOfRecordId: existing.id,
+            deletedAt: existing.deletedAt
+          })
+          .returning();
+
+        const serverRevision = nextServerRevision++;
+        const [updated] = await tx
+          .update(encryptedRecords)
+          .set({
             type: record.type,
             encryptedPayload: record.encryptedPayload,
             payloadVersion: record.payloadVersion,
             clientRevision: record.clientRevision,
             serverRevision,
             sourceDeviceId: request.user.deviceId,
-            conflictOfRecordId: existing.id,
-            deletedAt
+            deletedAt,
+            updatedAt: new Date()
           })
+          .where(and(eq(encryptedRecords.id, record.id), eq(encryptedRecords.userId, userId)))
           .returning();
 
         acceptedRecords.push({
           clientRecordId: record.id,
-          serverRecordId: conflict.id,
-          serverRevision: conflict.serverRevision,
+          serverRecordId: updated.id,
+          serverRevision: updated.serverRevision,
           conflict: true,
-          conflictOfRecordId: existing.id
+          conflictOfRecordId: existing.id,
+          conflictRecordId: conflict.id
         });
       }
 
@@ -148,7 +167,16 @@ export async function syncRoutes(app: FastifyInstance) {
     const userId = request.user.userId;
 
     const records = await app.db
-      .select()
+      .select({
+        id: encryptedRecords.id,
+        type: encryptedRecords.type,
+        encryptedPayload: encryptedRecords.encryptedPayload,
+        payloadVersion: encryptedRecords.payloadVersion,
+        clientRevision: encryptedRecords.clientRevision,
+        serverRevision: encryptedRecords.serverRevision,
+        conflictOfRecordId: encryptedRecords.conflictOfRecordId,
+        deletedAt: encryptedRecords.deletedAt
+      })
       .from(encryptedRecords)
       .where(and(eq(encryptedRecords.userId, userId), gt(encryptedRecords.serverRevision, input.afterServerRevision)))
       .orderBy(encryptedRecords.serverRevision)

@@ -17,7 +17,7 @@ export async function buildServer(config: AppConfig) {
     logger: {
       level: config.LOG_LEVEL
     },
-    trustProxy: true,
+    trustProxy: config.TRUST_PROXY || false,
     bodyLimit: 1024 * 1024
   });
 
@@ -40,6 +40,26 @@ export async function buildServer(config: AppConfig) {
           message: issue.message
         }))
       });
+    }
+
+    const statusCode =
+      typeof error === "object" &&
+      error !== null &&
+      "statusCode" in error &&
+      typeof error.statusCode === "number"
+        ? error.statusCode
+        : null;
+
+    if (statusCode != null && statusCode < 500) {
+      let errorCode = "request_failed";
+      if (statusCode === 401) {
+        errorCode = "unauthorized";
+      } else if (statusCode === 413) {
+        errorCode = "payload_too_large";
+      } else if (statusCode === 429) {
+        errorCode = "rate_limited";
+      }
+      return reply.code(statusCode).send({ error: errorCode });
     }
 
     request.log.error(error);

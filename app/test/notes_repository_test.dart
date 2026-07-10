@@ -31,6 +31,43 @@ void main() {
     expect(notes.single.mood, ColorMood.errand);
   });
 
+  test(
+    'keeps titles optional and automatic moods responsive to edits',
+    () async {
+      final noteId = await repository.createTextNote(
+        title: '',
+        body: 'Buy filters at the store',
+      );
+
+      var loaded = await repository.loadNoteForEditing(noteId);
+      expect(loaded?.title, isEmpty);
+      expect(loaded?.mood, ColorMood.errand);
+      expect(loaded?.moodIsAutomatic, isTrue);
+
+      await repository.updateTextNote(
+        id: noteId,
+        title: '',
+        body: 'Study the project plan',
+        mood: null,
+        pinned: false,
+      );
+      loaded = await repository.loadNoteForEditing(noteId);
+      expect(loaded?.mood, ColorMood.focus);
+      expect(loaded?.moodIsAutomatic, isTrue);
+
+      await repository.updateTextNote(
+        id: noteId,
+        title: '',
+        body: 'Buy something else',
+        mood: ColorMood.urgent,
+        pinned: false,
+      );
+      loaded = await repository.loadNoteForEditing(noteId);
+      expect(loaded?.mood, ColorMood.urgent);
+      expect(loaded?.moodIsAutomatic, isFalse);
+    },
+  );
+
   test('moves notes to trash so they leave the home preview list', () async {
     await repository.createTextNote(
       title: 'Delete me',
@@ -90,6 +127,8 @@ void main() {
       id: noteId,
       title: 'Updated',
       body: 'New body',
+      mood: ColorMood.focus,
+      pinned: true,
       reminder: NoteReminder(
         nextFireAt: DateTime(2026, 7, 11, 10, 30),
         recurrence: ReminderRecurrence.daily,
@@ -103,5 +142,51 @@ void main() {
     expect(updated?.body, 'New body');
     expect(updated?.reminder?.recurrence, ReminderRecurrence.daily);
     expect(reminders, hasLength(1));
+  });
+
+  test('persists checklist items and toggles completion', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Saturday jobs',
+      body: '',
+      mood: ColorMood.routine,
+      pinned: true,
+      checklistItems: const [
+        ChecklistItemDraft(text: 'Wash the car'),
+        ChecklistItemDraft(text: 'Water plants', done: true),
+      ],
+    );
+
+    final beforeToggle = await repository.watchNotePreviews().first;
+    expect(beforeToggle.single.pinned, isTrue);
+    expect(beforeToggle.single.mood, ColorMood.routine);
+    expect(beforeToggle.single.checklistItems, hasLength(2));
+    expect(beforeToggle.single.completedChecklistItems, 1);
+
+    await repository.toggleChecklistItem(noteId, 0);
+
+    final afterToggle = await repository.watchNotePreviews().first;
+    expect(afterToggle.single.completedChecklistItems, 2);
+  });
+
+  test('archives notes and restores them from trash', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Keep me',
+      body: 'Useful later',
+    );
+
+    await repository.setArchived(noteId, true);
+    expect(
+      (await repository.watchNotePreviews().first).single.archived,
+      isTrue,
+    );
+
+    await repository.moveNoteToTrash(noteId);
+    expect(await repository.watchNotePreviews().first, isEmpty);
+    expect(await repository.watchTrashedNotePreviews().first, hasLength(1));
+
+    await repository.restoreNote(noteId);
+    final restored = await repository.watchNotePreviews().first;
+    expect(restored, hasLength(1));
+    expect(restored.single.archived, isTrue);
   });
 }

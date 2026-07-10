@@ -1,0 +1,1 @@
+ALTER TABLE "key_bundles" ADD COLUMN "recovery_verifier" text;

@@ -100,6 +100,22 @@ class MainActivity : FlutterActivity() {
         }
 
         val installedInfo = packageManager.getPackageInfo(packageName, flags)
+        val archiveVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            archiveInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            archiveInfo.versionCode.toLong()
+        }
+        val installedVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            installedInfo.versionCode.toLong()
+        }
+        if (archiveVersionCode <= installedVersionCode) {
+            return "Downloaded APK is not newer than the installed version."
+        }
+
         val archiveDigests = signingCertificateDigests(archiveInfo)
         val installedDigests = signingCertificateDigests(installedInfo)
 

@@ -59,6 +59,21 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     requiredDuringInsert: false,
     defaultValue: const Constant('clear'),
   );
+  static const VerificationMeta _moodIsAutomaticMeta = const VerificationMeta(
+    'moodIsAutomatic',
+  );
+  @override
+  late final GeneratedColumn<bool> moodIsAutomatic = GeneratedColumn<bool>(
+    'mood_is_automatic',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("mood_is_automatic" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   static const VerificationMeta _isPinnedMeta = const VerificationMeta(
     'isPinned',
   );
@@ -129,6 +144,7 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     body,
     noteType,
     mood,
+    moodIsAutomatic,
     isPinned,
     isArchived,
     trashedAt,
@@ -174,6 +190,15 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
       context.handle(
         _moodMeta,
         mood.isAcceptableOrUnknown(data['mood']!, _moodMeta),
+      );
+    }
+    if (data.containsKey('mood_is_automatic')) {
+      context.handle(
+        _moodIsAutomaticMeta,
+        moodIsAutomatic.isAcceptableOrUnknown(
+          data['mood_is_automatic']!,
+          _moodIsAutomaticMeta,
+        ),
       );
     }
     if (data.containsKey('is_pinned')) {
@@ -239,6 +264,10 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
         DriftSqlType.string,
         data['${effectivePrefix}mood'],
       )!,
+      moodIsAutomatic: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}mood_is_automatic'],
+      )!,
       isPinned: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_pinned'],
@@ -274,6 +303,7 @@ class Note extends DataClass implements Insertable<Note> {
   final String body;
   final String noteType;
   final String mood;
+  final bool moodIsAutomatic;
   final bool isPinned;
   final bool isArchived;
   final DateTime? trashedAt;
@@ -285,6 +315,7 @@ class Note extends DataClass implements Insertable<Note> {
     required this.body,
     required this.noteType,
     required this.mood,
+    required this.moodIsAutomatic,
     required this.isPinned,
     required this.isArchived,
     this.trashedAt,
@@ -299,6 +330,7 @@ class Note extends DataClass implements Insertable<Note> {
     map['body'] = Variable<String>(body);
     map['note_type'] = Variable<String>(noteType);
     map['mood'] = Variable<String>(mood);
+    map['mood_is_automatic'] = Variable<bool>(moodIsAutomatic);
     map['is_pinned'] = Variable<bool>(isPinned);
     map['is_archived'] = Variable<bool>(isArchived);
     if (!nullToAbsent || trashedAt != null) {
@@ -316,6 +348,7 @@ class Note extends DataClass implements Insertable<Note> {
       body: Value(body),
       noteType: Value(noteType),
       mood: Value(mood),
+      moodIsAutomatic: Value(moodIsAutomatic),
       isPinned: Value(isPinned),
       isArchived: Value(isArchived),
       trashedAt: trashedAt == null && nullToAbsent
@@ -337,6 +370,7 @@ class Note extends DataClass implements Insertable<Note> {
       body: serializer.fromJson<String>(json['body']),
       noteType: serializer.fromJson<String>(json['noteType']),
       mood: serializer.fromJson<String>(json['mood']),
+      moodIsAutomatic: serializer.fromJson<bool>(json['moodIsAutomatic']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       isArchived: serializer.fromJson<bool>(json['isArchived']),
       trashedAt: serializer.fromJson<DateTime?>(json['trashedAt']),
@@ -353,6 +387,7 @@ class Note extends DataClass implements Insertable<Note> {
       'body': serializer.toJson<String>(body),
       'noteType': serializer.toJson<String>(noteType),
       'mood': serializer.toJson<String>(mood),
+      'moodIsAutomatic': serializer.toJson<bool>(moodIsAutomatic),
       'isPinned': serializer.toJson<bool>(isPinned),
       'isArchived': serializer.toJson<bool>(isArchived),
       'trashedAt': serializer.toJson<DateTime?>(trashedAt),
@@ -367,6 +402,7 @@ class Note extends DataClass implements Insertable<Note> {
     String? body,
     String? noteType,
     String? mood,
+    bool? moodIsAutomatic,
     bool? isPinned,
     bool? isArchived,
     Value<DateTime?> trashedAt = const Value.absent(),
@@ -378,6 +414,7 @@ class Note extends DataClass implements Insertable<Note> {
     body: body ?? this.body,
     noteType: noteType ?? this.noteType,
     mood: mood ?? this.mood,
+    moodIsAutomatic: moodIsAutomatic ?? this.moodIsAutomatic,
     isPinned: isPinned ?? this.isPinned,
     isArchived: isArchived ?? this.isArchived,
     trashedAt: trashedAt.present ? trashedAt.value : this.trashedAt,
@@ -391,6 +428,9 @@ class Note extends DataClass implements Insertable<Note> {
       body: data.body.present ? data.body.value : this.body,
       noteType: data.noteType.present ? data.noteType.value : this.noteType,
       mood: data.mood.present ? data.mood.value : this.mood,
+      moodIsAutomatic: data.moodIsAutomatic.present
+          ? data.moodIsAutomatic.value
+          : this.moodIsAutomatic,
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       isArchived: data.isArchived.present
           ? data.isArchived.value
@@ -409,6 +449,7 @@ class Note extends DataClass implements Insertable<Note> {
           ..write('body: $body, ')
           ..write('noteType: $noteType, ')
           ..write('mood: $mood, ')
+          ..write('moodIsAutomatic: $moodIsAutomatic, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
           ..write('trashedAt: $trashedAt, ')
@@ -425,6 +466,7 @@ class Note extends DataClass implements Insertable<Note> {
     body,
     noteType,
     mood,
+    moodIsAutomatic,
     isPinned,
     isArchived,
     trashedAt,
@@ -440,6 +482,7 @@ class Note extends DataClass implements Insertable<Note> {
           other.body == this.body &&
           other.noteType == this.noteType &&
           other.mood == this.mood &&
+          other.moodIsAutomatic == this.moodIsAutomatic &&
           other.isPinned == this.isPinned &&
           other.isArchived == this.isArchived &&
           other.trashedAt == this.trashedAt &&
@@ -453,6 +496,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
   final Value<String> body;
   final Value<String> noteType;
   final Value<String> mood;
+  final Value<bool> moodIsAutomatic;
   final Value<bool> isPinned;
   final Value<bool> isArchived;
   final Value<DateTime?> trashedAt;
@@ -465,6 +509,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.body = const Value.absent(),
     this.noteType = const Value.absent(),
     this.mood = const Value.absent(),
+    this.moodIsAutomatic = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
     this.trashedAt = const Value.absent(),
@@ -478,6 +523,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.body = const Value.absent(),
     this.noteType = const Value.absent(),
     this.mood = const Value.absent(),
+    this.moodIsAutomatic = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
     this.trashedAt = const Value.absent(),
@@ -493,6 +539,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Expression<String>? body,
     Expression<String>? noteType,
     Expression<String>? mood,
+    Expression<bool>? moodIsAutomatic,
     Expression<bool>? isPinned,
     Expression<bool>? isArchived,
     Expression<DateTime>? trashedAt,
@@ -506,6 +553,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
       if (body != null) 'body': body,
       if (noteType != null) 'note_type': noteType,
       if (mood != null) 'mood': mood,
+      if (moodIsAutomatic != null) 'mood_is_automatic': moodIsAutomatic,
       if (isPinned != null) 'is_pinned': isPinned,
       if (isArchived != null) 'is_archived': isArchived,
       if (trashedAt != null) 'trashed_at': trashedAt,
@@ -521,6 +569,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Value<String>? body,
     Value<String>? noteType,
     Value<String>? mood,
+    Value<bool>? moodIsAutomatic,
     Value<bool>? isPinned,
     Value<bool>? isArchived,
     Value<DateTime?>? trashedAt,
@@ -534,6 +583,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
       body: body ?? this.body,
       noteType: noteType ?? this.noteType,
       mood: mood ?? this.mood,
+      moodIsAutomatic: moodIsAutomatic ?? this.moodIsAutomatic,
       isPinned: isPinned ?? this.isPinned,
       isArchived: isArchived ?? this.isArchived,
       trashedAt: trashedAt ?? this.trashedAt,
@@ -560,6 +610,9 @@ class NotesCompanion extends UpdateCompanion<Note> {
     }
     if (mood.present) {
       map['mood'] = Variable<String>(mood.value);
+    }
+    if (moodIsAutomatic.present) {
+      map['mood_is_automatic'] = Variable<bool>(moodIsAutomatic.value);
     }
     if (isPinned.present) {
       map['is_pinned'] = Variable<bool>(isPinned.value);
@@ -590,6 +643,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
           ..write('body: $body, ')
           ..write('noteType: $noteType, ')
           ..write('mood: $mood, ')
+          ..write('moodIsAutomatic: $moodIsAutomatic, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
           ..write('trashedAt: $trashedAt, ')
@@ -3021,6 +3075,7 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<String> body,
       Value<String> noteType,
       Value<String> mood,
+      Value<bool> moodIsAutomatic,
       Value<bool> isPinned,
       Value<bool> isArchived,
       Value<DateTime?> trashedAt,
@@ -3035,6 +3090,7 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<String> body,
       Value<String> noteType,
       Value<String> mood,
+      Value<bool> moodIsAutomatic,
       Value<bool> isPinned,
       Value<bool> isArchived,
       Value<DateTime?> trashedAt,
@@ -3115,6 +3171,11 @@ class $$NotesTableFilterComposer
 
   ColumnFilters<String> get mood => $composableBuilder(
     column: $table.mood,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get moodIsAutomatic => $composableBuilder(
+    column: $table.moodIsAutomatic,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3228,6 +3289,11 @@ class $$NotesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get moodIsAutomatic => $composableBuilder(
+    column: $table.moodIsAutomatic,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isPinned => $composableBuilder(
     column: $table.isPinned,
     builder: (column) => ColumnOrderings(column),
@@ -3277,6 +3343,11 @@ class $$NotesTableAnnotationComposer
 
   GeneratedColumn<String> get mood =>
       $composableBuilder(column: $table.mood, builder: (column) => column);
+
+  GeneratedColumn<bool> get moodIsAutomatic => $composableBuilder(
+    column: $table.moodIsAutomatic,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<bool> get isPinned =>
       $composableBuilder(column: $table.isPinned, builder: (column) => column);
@@ -3379,6 +3450,7 @@ class $$NotesTableTableManager
                 Value<String> body = const Value.absent(),
                 Value<String> noteType = const Value.absent(),
                 Value<String> mood = const Value.absent(),
+                Value<bool> moodIsAutomatic = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
@@ -3391,6 +3463,7 @@ class $$NotesTableTableManager
                 body: body,
                 noteType: noteType,
                 mood: mood,
+                moodIsAutomatic: moodIsAutomatic,
                 isPinned: isPinned,
                 isArchived: isArchived,
                 trashedAt: trashedAt,
@@ -3405,6 +3478,7 @@ class $$NotesTableTableManager
                 Value<String> body = const Value.absent(),
                 Value<String> noteType = const Value.absent(),
                 Value<String> mood = const Value.absent(),
+                Value<bool> moodIsAutomatic = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
@@ -3417,6 +3491,7 @@ class $$NotesTableTableManager
                 body: body,
                 noteType: noteType,
                 mood: mood,
+                moodIsAutomatic: moodIsAutomatic,
                 isPinned: isPinned,
                 isArchived: isArchived,
                 trashedAt: trashedAt,

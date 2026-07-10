@@ -7,12 +7,16 @@ import 'package:path_provider/path_provider.dart';
 
 part 'local_database.g.dart';
 
+final _databaseKeyPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
+
 class Notes extends Table {
   TextColumn get id => text()();
   TextColumn get title => text().withDefault(const Constant(''))();
   TextColumn get body => text().withDefault(const Constant(''))();
   TextColumn get noteType => text().withDefault(const Constant('text'))();
   TextColumn get mood => text().withDefault(const Constant('clear'))();
+  BoolColumn get moodIsAutomatic =>
+      boolean().withDefault(const Constant(true))();
   BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
   BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
   DateTimeColumn get trashedAt => dateTime().nullable()();
@@ -25,7 +29,8 @@ class Notes extends Table {
 
 class ChecklistItems extends Table {
   TextColumn get id => text()();
-  TextColumn get noteId => text().references(Notes, #id, onDelete: KeyAction.cascade)();
+  TextColumn get noteId =>
+      text().references(Notes, #id, onDelete: KeyAction.cascade)();
   TextColumn get content => text().named('text')();
   BoolColumn get isDone => boolean().withDefault(const Constant(false))();
   IntColumn get sortOrder => integer()();
@@ -38,7 +43,8 @@ class ChecklistItems extends Table {
 
 class Reminders extends Table {
   TextColumn get id => text()();
-  TextColumn get noteId => text().references(Notes, #id, onDelete: KeyAction.cascade)();
+  TextColumn get noteId =>
+      text().references(Notes, #id, onDelete: KeyAction.cascade)();
   DateTimeColumn get nextFireAt => dateTime()();
   TextColumn get timezone => text()();
   TextColumn get recurrenceKind => text().withDefault(const Constant('none'))();
@@ -55,7 +61,8 @@ class Reminders extends Table {
 
 class ReminderOccurrences extends Table {
   TextColumn get id => text()();
-  TextColumn get reminderId => text().references(Reminders, #id, onDelete: KeyAction.cascade)();
+  TextColumn get reminderId =>
+      text().references(Reminders, #id, onDelete: KeyAction.cascade)();
   DateTimeColumn get scheduledFor => dateTime()();
   TextColumn get status => text()();
   DateTimeColumn get actedAt => dateTime().nullable()();
@@ -73,7 +80,8 @@ class SyncRecords extends Table {
   IntColumn get payloadVersion => integer().withDefault(const Constant(1))();
   IntColumn get clientRevision => integer()();
   IntColumn get serverRevision => integer().nullable()();
-  BoolColumn get hasLocalChanges => boolean().withDefault(const Constant(true))();
+  BoolColumn get hasLocalChanges =>
+      boolean().withDefault(const Constant(true))();
   BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
   TextColumn get conflictOfRecordId => text().nullable()();
   DateTimeColumn get deletedAt => dateTime().nullable()();
@@ -85,27 +93,59 @@ class SyncRecords extends Table {
 }
 
 @DriftDatabase(
-  tables: [
-    Notes,
-    ChecklistItems,
-    Reminders,
-    ReminderOccurrences,
-    SyncRecords,
-  ],
+  tables: [Notes, ChecklistItems, Reminders, ReminderOccurrences, SyncRecords],
 )
 class LocalDatabase extends _$LocalDatabase {
-  LocalDatabase() : super(_openConnection());
+  LocalDatabase({required Future<String> Function() databaseKey})
+    : super(_openConnection(databaseKey));
 
   LocalDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (migrator) => migrator.createAll(),
+    onUpgrade: (migrator, from, to) async {
+      if (from < 2) {
+        await migrator.addColumn(notes, notes.moodIsAutomatic);
+      }
+    },
+  );
 }
 
-LazyDatabase _openConnection() {
+LazyDatabase _openConnection(Future<String> Function() databaseKey) {
   return LazyDatabase(() async {
     final directory = await getApplicationDocumentsDirectory();
     final file = File(p.join(directory.path, 'recall.sqlite'));
-    return NativeDatabase.createInBackground(file);
+    final key = await databaseKey();
+    if (!_databaseKeyPattern.hasMatch(key)) {
+      throw StateError('The encrypted database key is invalid.');
+    }
+    return NativeDatabase.createInBackground(
+      file,
+      setup: (database) {
+        if (database.select('PRAGMA cipher').isEmpty) {
+          throw StateError('Encrypted SQLite is not available.');
+        }
+
+        var isPlaintext = false;
+        try {
+          database.select('SELECT count(*) FROM sqlite_master');
+          isPlaintext = true;
+        } on Object {
+          // An encrypted database cannot be read before its key is supplied.
+        }
+
+        if (isPlaintext) {
+          // This also migrates databases created by earlier Recall builds.
+          database.execute("PRAGMA rekey = '$key'");
+        } else {
+          database.execute("PRAGMA key = '$key'");
+        }
+        database.select('SELECT count(*) FROM sqlite_master');
+      },
+    );
   });
 }

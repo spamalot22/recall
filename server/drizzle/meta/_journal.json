@@ -15,6 +15,20 @@
       "when": 1783428562511,
       "tag": "0001_futuristic_wonder_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783636238494,
+      "tag": "0002_tiny_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783662879900,
+      "tag": "0003_icy_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -11,7 +12,12 @@ class UpdateService {
     HttpClient? httpClient,
     this.owner = 'spamalot22',
     this.repository = 'recall',
-  }) : _httpClient = httpClient ?? HttpClient();
+  }) : _httpClient =
+           httpClient ??
+           (HttpClient()..connectionTimeout = const Duration(seconds: 15));
+
+  static const _maxMetadataBytes = 1024 * 1024;
+  static const _maxApkBytes = 250 * 1024 * 1024;
 
   final HttpClient _httpClient;
   final String owner;
@@ -62,24 +68,37 @@ class UpdateService {
         );
 
     final downloadUrl = asset['browser_download_url'];
-    if (downloadUrl is! String || Uri.tryParse(downloadUrl) == null) {
+    final apkDownloadUrl = downloadUrl is String
+        ? Uri.tryParse(downloadUrl)
+        : null;
+    if (apkDownloadUrl == null ||
+        apkDownloadUrl.scheme != 'https' ||
+        apkDownloadUrl.host != 'github.com' ||
+        !_isExpectedDownloadPath(
+          apkDownloadUrl,
+          tag: tag,
+          assetName: expectedAssetName,
+        )) {
       throw const UpdateException(
         'GitHub returned an invalid APK download URL.',
       );
     }
 
     final size = asset['size'];
+    if (size is! int || size < 1 || size > _maxApkBytes) {
+      throw const UpdateException('GitHub returned an invalid APK size.');
+    }
 
     return UpdateCheckResult(
       currentVersion: current,
       latestVersion: latest,
       apkName: expectedAssetName,
-      apkDownloadUrl: Uri.parse(downloadUrl),
+      apkDownloadUrl: apkDownloadUrl,
       releaseUrl: Uri.https(
         'github.com',
         '/$owner/$repository/releases/tag/$tag',
       ),
-      downloadSizeBytes: size is int ? size : null,
+      downloadSizeBytes: size,
       updateAvailable: latest.compareTo(current) > 0,
     );
   }
@@ -95,45 +114,81 @@ class UpdateService {
       await directory.create(recursive: true);
     }
 
+    if (update.downloadSizeBytes == null ||
+        update.downloadSizeBytes! < 1 ||
+        update.downloadSizeBytes! > _maxApkBytes ||
+        update.apkDownloadUrl.scheme != 'https' ||
+        update.apkDownloadUrl.host != 'github.com' ||
+        !_isExpectedDownloadPath(
+          update.apkDownloadUrl,
+          tag: update.latestVersion.toString(),
+          assetName: update.apkName,
+        )) {
+      throw const UpdateException('Update download metadata is invalid.');
+    }
+
     final file = File(p.join(directory.path, update.apkName));
+    final partialFile = File('${file.path}.part');
+    if (partialFile.existsSync()) {
+      await partialFile.delete();
+    }
     final request = await _httpClient.getUrl(update.apkDownloadUrl);
-    _setCommonHeaders(request);
+    _setCommonHeaders(request, followRedirects: true);
     final response = await request.close();
     if (response.statusCode != HttpStatus.ok) {
       throw UpdateException(
         'APK download failed with HTTP ${response.statusCode}.',
       );
     }
-
-    final total = response.contentLength > 0
-        ? response.contentLength
-        : update.downloadSizeBytes;
-    var received = 0;
-    final sink = file.openWrite();
-    try {
-      await for (final chunk in response) {
-        received += chunk.length;
-        sink.add(chunk);
-        onProgress?.call(received, total);
-      }
-    } finally {
-      await sink.close();
-    }
-
-    if (total != null && received != total) {
+    if (!_hasSafeDownloadRedirects(response)) {
       throw const UpdateException(
-        'Downloaded APK size did not match the release asset.',
+        'APK download was redirected to an untrusted host.',
       );
     }
 
-    return file;
+    final total = update.downloadSizeBytes!;
+    if (response.contentLength > 0 && response.contentLength != total) {
+      throw const UpdateException(
+        'APK download size did not match the release asset.',
+      );
+    }
+    var received = 0;
+    final sink = partialFile.openWrite();
+    try {
+      await for (final chunk in response) {
+        received += chunk.length;
+        if (received > total || received > _maxApkBytes) {
+          throw const UpdateException(
+            'APK download exceeded its expected size.',
+          );
+        }
+        sink.add(chunk);
+        onProgress?.call(received, total);
+      }
+      await sink.close();
+      if (received != total) {
+        throw const UpdateException(
+          'Downloaded APK size did not match the release asset.',
+        );
+      }
+      if (file.existsSync()) {
+        await file.delete();
+      }
+      return partialFile.rename(file.path);
+    } on Object {
+      await sink.close();
+      if (partialFile.existsSync()) {
+        await partialFile.delete();
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> _getJson(Uri uri) async {
     final request = await _httpClient.getUrl(uri);
-    _setCommonHeaders(request);
+    _setCommonHeaders(request, followRedirects: false);
     final response = await request.close();
-    final body = await utf8.decodeStream(response);
+    final body = await _readBounded(response, _maxMetadataBytes);
 
     if (response.statusCode == HttpStatus.notFound) {
       throw const UpdateException('GitHub release metadata was not found.');
@@ -155,14 +210,59 @@ class UpdateService {
     return decoded;
   }
 
-  void _setCommonHeaders(HttpClientRequest request) {
+  void _setCommonHeaders(
+    HttpClientRequest request, {
+    required bool followRedirects,
+  }) {
     request.headers.set(
       HttpHeaders.acceptHeader,
       'application/vnd.github+json',
     );
     request.headers.set(HttpHeaders.userAgentHeader, 'Recall/$appVersion');
-    request.followRedirects = true;
+    request.followRedirects = followRedirects;
     request.maxRedirects = 5;
+  }
+
+  bool _isExpectedDownloadPath(
+    Uri uri, {
+    required String tag,
+    required String assetName,
+  }) {
+    final segments = uri.pathSegments;
+    return segments.length == 6 &&
+        segments[0] == owner &&
+        segments[1] == repository &&
+        segments[2] == 'releases' &&
+        segments[3] == 'download' &&
+        segments[4] == tag &&
+        segments[5] == assetName;
+  }
+
+  bool _hasSafeDownloadRedirects(HttpClientResponse response) {
+    return response.redirects.every(
+      (redirect) =>
+          redirect.location.scheme == 'https' &&
+          const {
+            'github.com',
+            'release-assets.githubusercontent.com',
+          }.contains(redirect.location.host),
+    );
+  }
+
+  Future<String> _readBounded(HttpClientResponse response, int maximum) async {
+    if (response.contentLength > maximum) {
+      throw const UpdateException('GitHub release response was too large.');
+    }
+    final bytes = BytesBuilder(copy: false);
+    var length = 0;
+    await for (final chunk in response) {
+      length += chunk.length;
+      if (length > maximum) {
+        throw const UpdateException('GitHub release response was too large.');
+      }
+      bytes.add(chunk);
+    }
+    return utf8.decode(bytes.takeBytes());
   }
 }
 

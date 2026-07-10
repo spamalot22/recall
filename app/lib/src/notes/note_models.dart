@@ -9,7 +9,9 @@ class NotePreview {
     required this.reminderLabel,
     this.checklistItems = const [],
     this.pinned = false,
+    this.archived = false,
     this.recurring = false,
+    this.reminderAt,
   });
 
   final String id;
@@ -19,7 +21,12 @@ class NotePreview {
   final String reminderLabel;
   final List<ChecklistItemPreview> checklistItems;
   final bool pinned;
+  final bool archived;
   final bool recurring;
+  final DateTime? reminderAt;
+
+  int get completedChecklistItems =>
+      checklistItems.where((item) => item.done).length;
 }
 
 class NoteEditorSnapshot {
@@ -28,6 +35,9 @@ class NoteEditorSnapshot {
     required this.title,
     required this.body,
     required this.mood,
+    required this.moodIsAutomatic,
+    required this.pinned,
+    this.checklistItems = const [],
     this.reminder,
   });
 
@@ -35,6 +45,9 @@ class NoteEditorSnapshot {
   final String title;
   final String body;
   final ColorMood mood;
+  final bool moodIsAutomatic;
+  final bool pinned;
+  final List<ChecklistItemDraft> checklistItems;
   final NoteReminder? reminder;
 }
 
@@ -45,6 +58,20 @@ class NoteReminder {
   final ReminderRecurrence recurrence;
 
   bool get repeats => recurrence != ReminderRecurrence.none;
+}
+
+class ScheduledNoteReminder {
+  const ScheduledNoteReminder({
+    required this.noteId,
+    required this.title,
+    required this.body,
+    required this.reminder,
+  });
+
+  final String noteId;
+  final String title;
+  final String body;
+  final NoteReminder reminder;
 }
 
 enum ReminderRecurrence {
@@ -74,6 +101,13 @@ enum ReminderRecurrence {
 
 class ChecklistItemPreview {
   const ChecklistItemPreview(this.text, {this.done = false});
+
+  final String text;
+  final bool done;
+}
+
+class ChecklistItemDraft {
+  const ChecklistItemDraft({required this.text, this.done = false});
 
   final String text;
   final bool done;
@@ -136,6 +170,44 @@ enum ColorMood {
       orElse: () => ColorMood.clear,
     );
   }
+}
+
+ColorMood automaticMoodForNote({required String title, required String body}) {
+  final text = '$title $body'.toLowerCase();
+
+  if (text.contains('today') ||
+      text.contains('urgent') ||
+      text.contains('asap') ||
+      text.contains('deadline') ||
+      text.contains('overdue')) {
+    return ColorMood.urgent;
+  }
+  if (text.contains('buy') ||
+      text.contains('shop') ||
+      text.contains('store') ||
+      text.contains('errand') ||
+      text.contains('pick up') ||
+      text.contains('pack')) {
+    return ColorMood.errand;
+  }
+  if (text.contains('daily') ||
+      text.contains('weekly') ||
+      text.contains('monthly') ||
+      text.contains('every ') ||
+      text.contains('routine') ||
+      text.contains('clean') ||
+      text.contains('water')) {
+    return ColorMood.routine;
+  }
+  if (text.contains('plan') ||
+      text.contains('project') ||
+      text.contains('study') ||
+      text.contains('read') ||
+      text.contains('write') ||
+      text.contains('research')) {
+    return ColorMood.focus;
+  }
+  return ColorMood.clear;
 }
 
 const sampleNotes = [

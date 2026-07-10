@@ -4,7 +4,14 @@ Recall is a local-first notes and reminders app with reliable recurring reminder
 
 ## Current Status
 
-This repository is in initial scaffolding. The v1 target is Android-first Flutter plus a Dockerized Node/Fastify/PostgreSQL backend.
+Recall now has an Android-first local notes experience, reliable local reminders,
+an encrypted local SQLite database, and optional end-to-end encrypted sync to the
+Dockerized Node/Fastify/PostgreSQL backend.
+
+Implemented client features include text notes, checklists, search, pinning,
+archive, trash, curated colour moods, recurring reminders, encrypted account
+setup, password recovery keys, automatic/manual sync, conflict copies, and
+signed in-app APK updates.
 
 ## Layout
 
@@ -51,6 +58,33 @@ flutter run
 
 The first app target is Android.
 
+An optional default backup URL can be compiled into development builds:
+
+```bash
+flutter run --dart-define=RECALL_API_URL=https://recall.example.com
+```
+
+Users can also enter the URL in **Settings > Connect encrypted backup**. Recall
+requires HTTPS except for Android-emulator development through `10.0.2.2` or
+`localhost`.
+
+## Encryption And Recovery
+
+- The local database is encrypted with SQLite3MultipleCiphers using a random
+  256-bit key protected by platform secure storage.
+- Each sync record is encrypted with AES-256-GCM before upload.
+- The account master key is wrapped independently by the password and recovery
+  key. The backend stores only wrapped keys, a recovery verifier, and encrypted
+  records.
+- Store the recovery key outside the device. Losing both the password and
+  recovery key makes the encrypted notes unrecoverable.
+- A local installation is bound to its first connected user account to prevent
+  one user's local notes from being uploaded to another account accidentally.
+
+Sync runs after local changes and whenever the app opens or resumes. Conflicting
+remote content is preserved as a visible `Conflict:` note copy instead of being
+silently overwritten.
+
 ## Releases
 
 CI runs on pushes to `main` and pull requests. Android APK publishing only runs when a bare semantic version tag is pushed:
@@ -61,3 +95,9 @@ git push origin 1.1.1
 ```
 
 Tags such as `v1.1.1` or `1.1.1-beta.1` do not publish.
+
+Release builds fail when the release keystore is not configured; they never
+fall back to debug signing. The in-app updater accepts only the expected GitHub
+release asset, bounds the download size, and asks Android to install it only
+after its package name, version code, and signing certificate match the
+installed Recall app.

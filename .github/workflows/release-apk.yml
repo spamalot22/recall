@@ -12,7 +12,7 @@ on:
       - '[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FLUTTER_VERSION: 3.44.2
@@ -43,8 +43,8 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
@@ -61,16 +61,22 @@ jobs:
     needs: [version, server-check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - name: Check Flutter app
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
       - name: Set up release keystore
         working-directory: app/android
         env:
@@ -94,19 +100,30 @@ jobs:
       - name: Build release APK
         working-directory: app
         run: |
-          flutter pub get
-          flutter analyze
-          flutter test
           flutter build apk --release \
             --build-name=${{ needs.version.outputs.name }} \
             --build-number=${{ needs.version.outputs.code }} \
             --dart-define=APP_VERSION=${{ github.ref_name }}
+      - name: Remove release signing material
+        if: always()
+        run: rm -f app/android/key.properties app/android/app/recall-release.jks
       - name: Prepare release asset
         run: mv app/build/app/outputs/flutter-apk/app-release.apk recall-android-${{ github.ref_name }}.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: recall-release-apk
           path: recall-android-${{ github.ref_name }}.apk
+
+  publish:
+    needs: [version, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: recall-release-apk
+          path: .
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

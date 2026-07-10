@@ -202,6 +202,10 @@ Local search indexes can be plaintext on device because data is decrypted locall
 
 ## Suggested Milestones
 
+Milestones 1-4 and the core portions of milestones 5-7 are implemented. The
+remaining reminder work is advanced recurrence/snooze history, while release
+prep still needs broader on-device and multi-device integration testing.
+
 ### Milestone 1: Skeleton
 
 - Create Flutter app shell.
@@ -295,8 +299,7 @@ Local search indexes can be plaintext on device because data is decrypted locall
 
 ## Open Decisions
 
-- Exact Flutter crypto package selection.
-- Exact Android reminder package and native integration strategy.
-- Exact conflict UI.
 - Initial curated color mood names and palettes.
-- Whether bootstrap user setup happens entirely through env vars or a one-time setup endpoint.
+- Whether conflict copies should gain a dedicated comparison/merge screen.
+- Whether a future explicit profile-reset/export flow should permit switching
+  the local installation to a different account.
