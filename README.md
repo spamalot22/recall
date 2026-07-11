@@ -9,9 +9,9 @@ an encrypted local SQLite database, and optional end-to-end encrypted sync to th
 Dockerized Node/Fastify/PostgreSQL backend.
 
 Implemented client features include text notes, checklists, search, pinning,
-archive, trash, curated colour moods, recurring reminders, encrypted account
-setup, password recovery keys, automatic/manual sync, conflict copies, and
-signed in-app APK updates.
+archive, trash, Material You theming, locally inferred colour moods with manual
+overrides, recurring reminders, encrypted account setup, password recovery
+keys, automatic/manual sync, conflict copies, and signed in-app APK updates.
 
 ## Layout
 

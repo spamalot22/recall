@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -23,28 +24,36 @@ class RecallApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return MaterialApp(
-      title: 'Recall',
-      debugShowCheckedModeBanner: false,
-      theme: _buildTheme(Brightness.light),
-      darkTheme: _buildTheme(Brightness.dark),
-      themeMode: ref.watch(themeModeProvider),
-      home: const RecallHomePage(),
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) {
+        final lightScheme = lightDynamic ?? _fallbackScheme(Brightness.light);
+        final darkScheme = darkDynamic ?? _fallbackScheme(Brightness.dark);
+        return MaterialApp(
+          title: 'Recall',
+          debugShowCheckedModeBanner: false,
+          theme: _buildTheme(lightScheme),
+          darkTheme: _buildTheme(darkScheme),
+          themeMode: ref.watch(themeModeProvider),
+          home: const RecallHomePage(),
+        );
+      },
     );
   }
 }
 
-ThemeData _buildTheme(Brightness brightness) {
-  const seed = Color(0xFF356D64);
-  final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
+ColorScheme _fallbackScheme(Brightness brightness) {
+  return ColorScheme.fromSeed(
+    seedColor: const Color(0xFF356D64),
+    brightness: brightness,
+  );
+}
 
+ThemeData _buildTheme(ColorScheme scheme) {
   return ThemeData(
     useMaterial3: true,
-    brightness: brightness,
+    brightness: scheme.brightness,
     colorScheme: scheme,
-    scaffoldBackgroundColor: brightness == Brightness.dark
-        ? const Color(0xFF111416)
-        : const Color(0xFFFCFDFC),
+    scaffoldBackgroundColor: scheme.surface,
     appBarTheme: AppBarTheme(
       centerTitle: false,
       backgroundColor: Colors.transparent,
@@ -104,6 +113,7 @@ class RecallHomePage extends ConsumerStatefulWidget {
 class _RecallHomePageState extends ConsumerState<RecallHomePage>
     with WidgetsBindingObserver {
   final _searchController = TextEditingController();
+  StreamSubscription<String>? _notificationOpenSubscription;
   bool _startupUpdateCheckStarted = false;
   bool _gridLayout = true;
   _NoteFilter _filter = _NoteFilter.all;
@@ -113,10 +123,15 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
+    final reminderScheduler = ref.read(reminderSchedulerProvider);
+    _notificationOpenSubscription = reminderScheduler.openNoteRequests.listen(
+      _openNoteFromNotification,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!ref.read(backgroundStartupEnabledProvider)) {
         return;
       }
+      unawaited(_initializeRemindersQuietly(reminderScheduler));
       unawaited(_checkForUpdatesOnStartup());
       unawaited(_syncQuietly(ref));
     });
@@ -125,6 +140,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_notificationOpenSubscription?.cancel());
     _searchController
       ..removeListener(_onSearchChanged)
       ..dispose();
@@ -135,11 +151,32 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
         ref.read(backgroundStartupEnabledProvider)) {
+      // Background notification actions use their own database connection.
+      ref.invalidate(notePreviewsProvider);
       unawaited(_syncQuietly(ref));
     }
   }
 
   void _onSearchChanged() => setState(() {});
+
+  void _openNoteFromNotification(String noteId) {
+    if (!mounted) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_openNoteEditor(context, noteId: noteId));
+      }
+    });
+  }
+
+  Future<void> _initializeRemindersQuietly(ReminderScheduler scheduler) async {
+    try {
+      await scheduler.initialize();
+    } on Object {
+      // Scheduling from the editor will surface any actionable failure.
+    }
+  }
 
   Future<void> _checkForUpdatesOnStartup() async {
     if (_startupUpdateCheckStarted || !mounted) {
@@ -444,7 +481,7 @@ class NoteCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = note.mood.resolve(Theme.of(context).brightness);
+    final colors = note.mood.resolve(Theme.of(context).colorScheme);
     final hasReminder = note.reminderAt != null;
     final hasTitle = note.title.trim().isNotEmpty;
 
@@ -1766,12 +1803,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         ? _mood
         : automaticMoodForNote(
             title: _titleController.text,
-            body: [
-              _bodyController.text,
-              for (final item in _checklistItems) item.controller.text,
-            ].join(' '),
+            body: _bodyController.text,
+            checklistItems: _checklistItems.map((item) => item.controller.text),
+            reminder: _reminderAt == null
+                ? null
+                : NoteReminder(
+                    nextFireAt: _reminderAt!,
+                    recurrence: _recurrence,
+                  ),
           );
-    final moodColors = mood.resolve(Theme.of(context).brightness);
+    final moodColors = mood.resolve(Theme.of(context).colorScheme);
     final unavailable = _saving || _loading || _missing;
 
     return PopScope<void>(
@@ -2569,7 +2610,7 @@ Future<_MoodSelection?> _showMoodPicker(
                   height: 24,
                   decoration: BoxDecoration(
                     color: mood
-                        .resolve(Theme.of(sheetContext).brightness)
+                        .resolve(Theme.of(sheetContext).colorScheme)
                         .accent,
                     borderRadius: BorderRadius.circular(6),
                   ),

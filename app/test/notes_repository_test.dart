@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/data/local_database.dart';
@@ -29,6 +30,20 @@ void main() {
     expect(notes.single.title, 'Buy filters');
     expect(notes.single.body, 'Pick up the right size');
     expect(notes.single.mood, ColorMood.errand);
+  });
+
+  test('re-evaluates previously stored automatic moods for previews', () async {
+    await repository.createTextNote(
+      title: 'Buy groceries',
+      body: 'Pick up milk',
+    );
+    await database
+        .update(database.notes)
+        .write(const NotesCompanion(mood: Value('clear')));
+
+    final preview = await repository.watchNotePreviews().first;
+
+    expect(preview.single.mood, ColorMood.errand);
   });
 
   test(
@@ -142,6 +157,45 @@ void main() {
     expect(updated?.body, 'New body');
     expect(updated?.reminder?.recurrence, ReminderRecurrence.daily);
     expect(reminders, hasLength(1));
+  });
+
+  test('snoozes an occurrence without moving its recurring schedule', () async {
+    final originalFireAt = DateTime(2026, 7, 11, 10, 30);
+    final noteId = await repository.createTextNote(
+      title: 'Weekly review',
+      body: 'Check the open tasks',
+      reminder: NoteReminder(
+        nextFireAt: originalFireAt,
+        recurrence: ReminderRecurrence.weekly,
+      ),
+    );
+    final snoozeUntil = DateTime(2026, 7, 11, 11, 30);
+
+    final schedule = await repository.snoozeNoteReminder(noteId, snoozeUntil);
+
+    expect(schedule?.reminder.nextFireAt, originalFireAt);
+    expect(schedule?.reminder.recurrence, ReminderRecurrence.weekly);
+    expect(schedule?.reminder.snoozeUntil, snoozeUntil);
+
+    await repository.completeReminderOccurrence(noteId);
+    final completed = await repository.loadNoteForEditing(noteId);
+    expect(completed?.reminder?.recurrence, ReminderRecurrence.weekly);
+    expect(completed?.reminder?.snoozeUntil, isNull);
+  });
+
+  test('completing a one-time reminder removes it from the note', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Call back',
+      body: '',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 7, 11, 10, 30),
+        recurrence: ReminderRecurrence.none,
+      ),
+    );
+
+    await repository.completeReminderOccurrence(noteId);
+
+    expect((await repository.loadNoteForEditing(noteId))?.reminder, isNull);
   });
 
   test('persists checklist items and toggles completion', () async {

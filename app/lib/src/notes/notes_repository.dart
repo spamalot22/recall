@@ -32,13 +32,21 @@ class NotesRepository {
                   ]))
                 .get();
         final reminder = await _firstEnabledReminder(note.id);
+        final checklistDrafts = checklistItems.map((item) => item.content);
 
         previews.add(
           NotePreview(
             id: note.id,
             title: note.title,
             body: note.body,
-            mood: ColorMood.fromName(note.mood),
+            mood: note.moodIsAutomatic
+                ? automaticMoodForNote(
+                    title: note.title,
+                    body: note.body,
+                    checklistItems: checklistDrafts,
+                    reminder: reminder,
+                  )
+                : ColorMood.fromName(note.mood),
             reminderLabel: _formatReminderLabel(reminder),
             checklistItems: checklistItems
                 .map(
@@ -84,10 +92,11 @@ class NotesRepository {
                 (mood ??
                         automaticMoodForNote(
                           title: trimmedTitle,
-                          body: [
-                            trimmedBody,
-                            ...checklistItems.map((item) => item.text),
-                          ].join(' '),
+                          body: trimmedBody,
+                          checklistItems: checklistItems.map(
+                            (item) => item.text,
+                          ),
+                          reminder: reminder,
                         ))
                     .name,
               ),
@@ -161,10 +170,9 @@ class NotesRepository {
             (mood ??
                     automaticMoodForNote(
                       title: trimmedTitle,
-                      body: [
-                        trimmedBody,
-                        ...checklistItems.map((item) => item.text),
-                      ].join(' '),
+                      body: trimmedBody,
+                      checklistItems: checklistItems.map((item) => item.text),
+                      reminder: reminder,
                     ))
                 .name,
           ),
@@ -246,17 +254,73 @@ class NotesRepository {
     for (final note in notes) {
       final reminder = await _firstEnabledReminder(note.id);
       if (reminder != null) {
+        final checklistItems = await _checklistItemsFor(note.id);
         schedules.add(
           ScheduledNoteReminder(
             noteId: note.id,
             title: note.title,
-            body: note.body,
+            body: _reminderBody(note.body, checklistItems),
             reminder: reminder,
           ),
         );
       }
     }
     return schedules;
+  }
+
+  Future<ScheduledNoteReminder?> snoozeNoteReminder(
+    String noteId,
+    DateTime until,
+  ) async {
+    final now = DateTime.now().toUtc();
+    final updated =
+        await (_db.update(_db.reminders)..where(
+              (reminder) =>
+                  reminder.noteId.equals(noteId) &
+                  reminder.isEnabled.equals(true),
+            ))
+            .write(
+              RemindersCompanion(
+                snoozeUntil: Value(until.toUtc()),
+                updatedAt: Value(now),
+              ),
+            );
+    if (updated == 0) {
+      return null;
+    }
+
+    await (_db.update(_db.notes)..where((note) => note.id.equals(noteId)))
+        .write(NotesCompanion(updatedAt: Value(now)));
+    return _scheduledReminderForNote(noteId);
+  }
+
+  Future<void> completeReminderOccurrence(String noteId) async {
+    final reminder = await _firstEnabledReminder(noteId);
+    if (reminder == null) {
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    await _db.transaction(() async {
+      if (reminder.repeats) {
+        await (_db.update(_db.reminders)..where(
+              (entry) =>
+                  entry.noteId.equals(noteId) & entry.isEnabled.equals(true),
+            ))
+            .write(
+              RemindersCompanion(
+                snoozeUntil: const Value(null),
+                updatedAt: Value(now),
+              ),
+            );
+      } else {
+        await (_db.delete(
+          _db.reminders,
+        )..where((entry) => entry.noteId.equals(noteId))).go();
+      }
+      await (_db.update(_db.notes)..where((note) => note.id.equals(noteId)))
+          .write(NotesCompanion(updatedAt: Value(now)));
+    });
   }
 
   Stream<List<NotePreview>> watchTrashedNotePreviews() {
@@ -287,7 +351,14 @@ class NotesRepository {
           id: note.id,
           title: note.title,
           body: note.body,
-          mood: ColorMood.fromName(note.mood),
+          mood: note.moodIsAutomatic
+              ? automaticMoodForNote(
+                  title: note.title,
+                  body: note.body,
+                  checklistItems: checklistItems.map((item) => item.content),
+                  reminder: reminder,
+                )
+              : ColorMood.fromName(note.mood),
           reminderLabel: _formatReminderLabel(reminder),
           checklistItems: checklistItems
               .map(
@@ -367,6 +438,7 @@ class NotesRepository {
     return NoteReminder(
       nextFireAt: reminder.nextFireAt.toLocal(),
       recurrence: ReminderRecurrence.fromName(reminder.recurrenceKind),
+      snoozeUntil: reminder.snoozeUntil?.toLocal(),
     );
   }
 
@@ -384,6 +456,7 @@ class NotesRepository {
             nextFireAt: reminder.nextFireAt.toUtc(),
             timezone: DateTime.now().timeZoneName,
             recurrenceKind: Value(reminder.recurrence.name),
+            snoozeUntil: Value(reminder.snoozeUntil?.toUtc()),
             createdAt: now,
             updatedAt: now,
           ),
@@ -409,5 +482,45 @@ class NotesRepository {
     final minute = local.minute.toString().padLeft(2, '0');
 
     return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} $hour:$minute';
+  }
+
+  Future<ScheduledNoteReminder?> _scheduledReminderForNote(
+    String noteId,
+  ) async {
+    final notes =
+        await (_db.select(_db.notes)
+              ..where(
+                (note) => note.id.equals(noteId) & note.trashedAt.isNull(),
+              )
+              ..limit(1))
+            .get();
+    if (notes.isEmpty) {
+      return null;
+    }
+
+    final reminder = await _firstEnabledReminder(noteId);
+    if (reminder == null) {
+      return null;
+    }
+    final note = notes.single;
+    return ScheduledNoteReminder(
+      noteId: note.id,
+      title: note.title,
+      body: _reminderBody(note.body, await _checklistItemsFor(note.id)),
+      reminder: reminder,
+    );
+  }
+
+  String _reminderBody(String body, List<ChecklistItem> checklistItems) {
+    final trimmedBody = body.trim();
+    if (trimmedBody.isNotEmpty) {
+      return trimmedBody;
+    }
+    for (final item in checklistItems) {
+      if (!item.isDone && item.content.trim().isNotEmpty) {
+        return item.content.trim();
+      }
+    }
+    return checklistItems.firstOrNull?.content.trim() ?? '';
   }
 }

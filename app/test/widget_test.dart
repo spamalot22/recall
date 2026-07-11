@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'package:dynamic_color/samples.dart';
+import 'package:dynamic_color/test_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,12 +10,38 @@ import 'package:recall_app/main.dart';
 import 'package:recall_app/src/account/secure_account_store.dart';
 import 'package:recall_app/src/data/local_database.dart';
 import 'package:recall_app/src/notes/note_models.dart';
+import 'package:recall_app/src/notes/notes_repository.dart';
 import 'package:recall_app/src/providers.dart';
 import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 import 'package:recall_app/src/sync/sync_service.dart';
 import 'package:recall_app/src/updates/update_service.dart';
 
 void main() {
+  setUp(() => DynamicColorTestingUtils.setMockDynamicColors());
+
+  testWidgets('uses the Android Material dynamic color scheme', (tester) async {
+    DynamicColorTestingUtils.setMockDynamicColors(
+      corePalette: SampleCorePalettes.green,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final context = tester.element(find.byType(RecallHomePage));
+    expect(
+      Theme.of(context).colorScheme.primary,
+      SampleColorSchemes.green(Brightness.light).primary,
+    );
+  });
+
   testWidgets('Recall home screen renders note cards', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -134,6 +164,51 @@ void main() {
     expect(notes.single.body, 'Captured without a title');
   });
 
+  testWidgets('notification tap opens the linked note', (tester) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(database);
+    final noteId = await repository.createTextNote(
+      title: 'Open from reminder',
+      body: 'The notification links here.',
+    );
+    final scheduler = _NoopReminderScheduler();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith(
+            (ref) => Stream.value(const [
+              NotePreview(
+                id: 'notification-note',
+                title: 'Open from reminder',
+                body: 'The notification links here.',
+                mood: ColorMood.clear,
+                reminderLabel: '',
+              ),
+            ]),
+          ),
+          reminderSchedulerProvider.overrideWithValue(scheduler),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pump();
+
+    scheduler.openNote(noteId);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NoteEditorPage), findsOneWidget);
+    final titleField = tester.widget<TextField>(
+      find.byKey(const Key('note-title-field')),
+    );
+    expect(titleField.controller?.text, 'Open from reminder');
+  });
+
   testWidgets('manual update check closes settings before showing status', (
     tester,
   ) async {
@@ -200,6 +275,16 @@ class _NoUpdateService extends UpdateService {
 }
 
 class _NoopReminderScheduler extends ReminderScheduler {
+  final _openRequests = StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get openNoteRequests => _openRequests.stream;
+
+  void openNote(String noteId) => _openRequests.add(noteId);
+
+  @override
+  Future<void> initialize() async {}
+
   @override
   Future<void> cancelNoteReminder(String noteId) async {}
 
@@ -215,6 +300,12 @@ class _NoopReminderScheduler extends ReminderScheduler {
     required String body,
     required NoteReminder reminder,
   }) async {}
+
+  @override
+  void dispose() {
+    _openRequests.close();
+    super.dispose();
+  }
 }
 
 class _NoopSyncService extends SyncService {

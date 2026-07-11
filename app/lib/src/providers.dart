@@ -64,5 +64,7 @@ final apkInstallerProvider = Provider<ApkInstaller>((ref) {
 });
 
 final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
-  return ReminderScheduler();
+  final scheduler = ReminderScheduler();
+  ref.onDispose(scheduler.dispose);
+  return scheduler;
 });
