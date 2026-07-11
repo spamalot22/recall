@@ -1919,6 +1919,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   bool _missing = false;
   bool _dirty = false;
   bool _hydrating = false;
+  bool _hadReminder = false;
 
   bool get _editing => widget.noteId != null;
 
@@ -1969,6 +1970,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     setState(() {
       _reminderAt = note.reminder?.nextFireAt;
       _recurrence = note.reminder?.recurrence ?? ReminderRecurrence.none;
+      _hadReminder = note.reminder != null;
       _mood = note.mood;
       _moodWasPicked = !note.moodIsAutomatic;
       _pinned = note.pinned;
@@ -2417,17 +2419,26 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     final syncService = ref.read(syncServiceProvider);
     final messenger = ScaffoldMessenger.of(context);
     await repository.moveNoteToTrash(noteId);
-    await scheduler.cancelNoteReminder(noteId);
     _dirty = false;
     if (!mounted) {
       return;
     }
     Navigator.of(context).pop();
+    var reminderCancellationFailed = false;
+    try {
+      await scheduler.cancelNoteReminder(noteId);
+    } on Object {
+      reminderCancellationFailed = true;
+    }
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('Note moved to trash.'),
+          content: Text(
+            reminderCancellationFailed
+                ? 'Note moved to trash, but its reminder could not be cancelled.'
+                : 'Note moved to trash.',
+          ),
           action: SnackBarAction(
             label: 'Undo',
             onPressed: () {
@@ -2550,9 +2561,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         );
       }
       try {
-        if (reminder == null) {
+        if (reminder == null && _hadReminder) {
           await scheduler.cancelNoteReminder(noteId);
-        } else {
+        } else if (reminder != null) {
           await scheduler.scheduleNoteReminder(
             noteId: noteId,
             title: title,
@@ -2560,6 +2571,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
             reminder: reminder,
           );
         }
+        _hadReminder = reminder != null;
       } on Object {
         reminderProblem = true;
       }
@@ -2583,9 +2595,11 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           messenger
             ..hideCurrentSnackBar()
             ..showSnackBar(
-              const SnackBar(
+              SnackBar(
                 content: Text(
-                  'Note saved, but the reminder could not be scheduled.',
+                  reminder == null
+                      ? 'Note saved, but the old reminder could not be cancelled.'
+                      : 'Note saved, but the reminder could not be scheduled.',
                 ),
               ),
             );

@@ -141,7 +141,9 @@ void main() {
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
-          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          reminderSchedulerProvider.overrideWithValue(
+            _FailingCancellationReminderScheduler(),
+          ),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
           storedSessionProvider.overrideWith((ref) async => null),
           backgroundStartupEnabledProvider.overrideWithValue(false),
@@ -164,6 +166,71 @@ void main() {
     expect(notes, hasLength(1));
     expect(notes.single.title, isEmpty);
     expect(notes.single.body, 'Captured without a title');
+    expect(
+      find.text('Note saved, but the reminder could not be scheduled.'),
+      findsNothing,
+    );
+  });
+
+  testWidgets('trashing closes the editor when reminder cleanup fails', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(database);
+    final noteId = await repository.createTextNote(
+      title: 'Trash me',
+      body: 'Close after moving this note.',
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith(
+            (ref) => Stream.value([
+              NotePreview(
+                id: noteId,
+                title: 'Trash me',
+                body: 'Close after moving this note.',
+                mood: ColorMood.clear,
+                reminderLabel: '',
+              ),
+            ]),
+          ),
+          reminderSchedulerProvider.overrideWithValue(
+            _FailingCancellationReminderScheduler(),
+          ),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.text('Trash me'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit note'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Note actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Move to trash'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Move to trash'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit note'), findsNothing);
+    expect(
+      find.text(
+        'Note moved to trash, but its reminder could not be cancelled.',
+      ),
+      findsOneWidget,
+    );
+    final note = await (database.select(
+      database.notes,
+    )..where((entry) => entry.id.equals(noteId))).getSingle();
+    expect(note.trashedAt, isNotNull);
   });
 
   testWidgets('notification tap opens the linked note', (tester) async {
@@ -360,6 +427,13 @@ class _NoopReminderScheduler extends ReminderScheduler {
   void dispose() {
     _openRequests.close();
     super.dispose();
+  }
+}
+
+class _FailingCancellationReminderScheduler extends _NoopReminderScheduler {
+  @override
+  Future<void> cancelNoteReminder(String noteId) async {
+    throw StateError('Notification service unavailable');
   }
 }
 
