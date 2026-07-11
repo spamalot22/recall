@@ -259,7 +259,7 @@ void main() {
     expect(find.text('Use a recovery key'), findsOneWidget);
   });
 
-  testWidgets('settings exposes configurable background sync', (tester) async {
+  testWidgets('settings reports background sync hotfix status', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
     final session = StoredSession(
@@ -300,8 +300,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Background sync'), findsOneWidget);
-    expect(find.text('Sync frequency'), findsOneWidget);
-    expect(find.text('Every hour'), findsWidgets);
+    expect(
+      find.text('Temporarily disabled; sync still runs when Recall opens'),
+      findsOneWidget,
+    );
+    expect(find.text('Sync frequency'), findsNothing);
     expect(find.text('Last successful sync'), findsOneWidget);
     expect(find.text('Last attempt'), findsOneWidget);
     expect(find.text('2 waiting to sync'), findsOneWidget);

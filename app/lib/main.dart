@@ -16,13 +16,8 @@ import 'src/sync/background_sync.dart';
 import 'src/updates/apk_installer.dart';
 import 'src/updates/update_service.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await initializeBackgroundSync();
-  } on Object {
-    // Local notes must remain available if the OS scheduler cannot initialize.
-  }
   runApp(const ProviderScope(child: RecallApp()));
 }
 
@@ -811,7 +806,6 @@ Future<void> _confirmMoveNoteToTrash(
 
 Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) async {
   var checkingForUpdates = false;
-  var updatingBackgroundSync = false;
   int? pendingSyncChanges;
   StoredSession? session;
   try {
@@ -909,119 +903,13 @@ Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) async {
                   },
                 ),
                 if (session != null) ...[
-                  SwitchListTile(
+                  const ListTile(
                     contentPadding: EdgeInsets.zero,
-                    secondary: const Icon(Icons.sync_lock_rounded),
-                    title: const Text('Background sync'),
+                    leading: Icon(Icons.sync_disabled_rounded),
+                    title: Text('Background sync'),
                     subtitle: Text(
-                      backgroundSyncSettings.enabled
-                          ? _backgroundSyncIntervalLabel(
-                              backgroundSyncSettings.interval,
-                            )
-                          : 'Off',
+                      'Temporarily disabled; sync still runs when Recall opens',
                     ),
-                    value: backgroundSyncSettings.enabled,
-                    onChanged: updatingBackgroundSync
-                        ? null
-                        : (enabled) async {
-                            final previous = backgroundSyncSettings;
-                            setSheetState(() {
-                              updatingBackgroundSync = true;
-                              backgroundSyncSettings = previous.copyWith(
-                                enabled: enabled,
-                              );
-                            });
-                            try {
-                              final updated = await ref
-                                  .read(backgroundSyncControllerProvider)
-                                  .updateSettings(
-                                    enabled: enabled,
-                                    interval: previous.interval,
-                                  );
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => backgroundSyncSettings = updated,
-                                );
-                              }
-                            } on Object {
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => backgroundSyncSettings = previous,
-                                );
-                                _showSnackBar(
-                                  context,
-                                  'Could not update background sync.',
-                                );
-                              }
-                            } finally {
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => updatingBackgroundSync = false,
-                                );
-                              }
-                            }
-                          },
-                  ),
-                  const SizedBox(height: 4),
-                  DropdownButtonFormField<Duration>(
-                    key: ValueKey(backgroundSyncSettings.interval),
-                    initialValue: backgroundSyncSettings.interval,
-                    decoration: const InputDecoration(
-                      labelText: 'Sync frequency',
-                      prefixIcon: Icon(Icons.schedule_rounded),
-                    ),
-                    items: [
-                      for (final interval in backgroundSyncIntervals)
-                        DropdownMenuItem(
-                          value: interval,
-                          child: Text(_backgroundSyncIntervalLabel(interval)),
-                        ),
-                    ],
-                    onChanged:
-                        !backgroundSyncSettings.enabled ||
-                            updatingBackgroundSync
-                        ? null
-                        : (interval) async {
-                            if (interval == null) {
-                              return;
-                            }
-                            final previous = backgroundSyncSettings;
-                            setSheetState(() {
-                              updatingBackgroundSync = true;
-                              backgroundSyncSettings = previous.copyWith(
-                                interval: interval,
-                              );
-                            });
-                            try {
-                              final updated = await ref
-                                  .read(backgroundSyncControllerProvider)
-                                  .updateSettings(
-                                    enabled: previous.enabled,
-                                    interval: interval,
-                                  );
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => backgroundSyncSettings = updated,
-                                );
-                              }
-                            } on Object {
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => backgroundSyncSettings = previous,
-                                );
-                                _showSnackBar(
-                                  context,
-                                  'Could not update background sync.',
-                                );
-                              }
-                            } finally {
-                              if (sheetContext.mounted) {
-                                setSheetState(
-                                  () => updatingBackgroundSync = false,
-                                );
-                              }
-                            }
-                          },
                   ),
                   const SizedBox(height: 12),
                   Text(
@@ -1962,19 +1850,6 @@ String _formatBytes(int bytes) {
     return '${(bytes / 1024).toStringAsFixed(1)} KB';
   }
   return '$bytes B';
-}
-
-String _backgroundSyncIntervalLabel(Duration interval) {
-  if (interval == const Duration(hours: 24)) {
-    return 'Daily';
-  }
-  if (interval.inMinutes < 60) {
-    return 'Every ${interval.inMinutes} minutes';
-  }
-  if (interval == const Duration(hours: 1)) {
-    return 'Every hour';
-  }
-  return 'Every ${interval.inHours} hours';
 }
 
 void _showSnackBar(
