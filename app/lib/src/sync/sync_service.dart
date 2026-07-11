@@ -8,11 +8,13 @@ import 'package:uuid/uuid.dart';
 import '../account/secure_account_store.dart';
 import '../data/local_database.dart';
 import '../security/record_cipher.dart';
+import 'sync_execution_lock.dart';
 
 class SyncException implements Exception {
-  const SyncException(this.message);
+  const SyncException(this.message, {this.retryable = false});
 
   final String message;
+  final bool retryable;
 
   @override
   String toString() => message;
@@ -38,7 +40,9 @@ class SyncService {
     this._accountStore, {
     RecordCipher? cipher,
     HttpClient? httpClient,
+    SyncExecutionLock? executionLock,
   }) : _cipher = cipher ?? RecordCipher(),
+       _executionLock = executionLock ?? const FileSyncExecutionLock(),
        _httpClient =
            httpClient ??
            (HttpClient()..connectionTimeout = const Duration(seconds: 15));
@@ -52,6 +56,7 @@ class SyncService {
   final LocalDatabase _database;
   final SecureAccountStore _accountStore;
   final RecordCipher _cipher;
+  final SyncExecutionLock _executionLock;
   final HttpClient _httpClient;
   final Uuid _uuid = const Uuid();
   Future<SyncResult>? _activeSync;
@@ -62,7 +67,7 @@ class SyncService {
       return active;
     }
 
-    final operation = _performSync();
+    final operation = _executionLock.synchronized(_performSync);
     _activeSync = operation;
     try {
       return await operation;
@@ -71,6 +76,28 @@ class SyncService {
         _activeSync = null;
       }
     }
+  }
+
+  Future<int> pendingChangeCount() {
+    return _executionLock.synchronized(() async {
+      if (await _accountStore.readSession() == null) {
+        return 0;
+      }
+      final records = await _database.select(_database.syncRecords).get();
+      final recordsById = {for (final record in records) record.id: record};
+      final pendingIds = {
+        for (final record in records)
+          if (record.hasLocalChanges) record.id,
+      };
+      final notes = await _database.select(_database.notes).get();
+      for (final note in notes) {
+        final record = recordsById[note.id];
+        if (record == null || note.updatedAt.isAfter(record.updatedAt)) {
+          pendingIds.add(note.id);
+        }
+      }
+      return pendingIds.length;
+    });
   }
 
   Future<SyncResult> _performSync() async {
@@ -647,7 +674,12 @@ class SyncService {
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         decoded is! Map) {
-      throw const SyncException('Could not sync with Recall backup.');
+      throw SyncException(
+        'Could not sync with Recall backup.',
+        retryable:
+            response.statusCode == HttpStatus.tooManyRequests ||
+            response.statusCode >= 500,
+      );
     }
     return Map<String, Object?>.from(decoded);
   }
@@ -661,6 +693,13 @@ class SyncService {
     final response = await request.close();
     final content = await _readResponse(response);
     if (response.statusCode != HttpStatus.ok) {
+      if (response.statusCode == HttpStatus.tooManyRequests ||
+          response.statusCode >= 500) {
+        throw const SyncException(
+          'Could not refresh the Recall backup session.',
+          retryable: true,
+        );
+      }
       throw const SyncException(
         'Your Recall backup session has expired. Sign in again.',
       );

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
@@ -11,11 +12,17 @@ import 'src/notes/notes_repository.dart';
 import 'src/providers.dart';
 import 'src/reminders/reminder_scheduler.dart';
 import 'src/sync/sync_service.dart';
+import 'src/sync/background_sync.dart';
 import 'src/updates/apk_installer.dart';
 import 'src/updates/update_service.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await initializeBackgroundSync();
+  } on Object {
+    // Local notes must remain available if the OS scheduler cannot initialize.
+  }
   runApp(const ProviderScope(child: RecallApp()));
 }
 
@@ -132,6 +139,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         return;
       }
       unawaited(_initializeRemindersQuietly(reminderScheduler));
+      unawaited(_configureBackgroundSyncQuietly(ref));
       unawaited(_checkForUpdatesOnStartup());
       unawaited(_syncQuietly(ref));
     });
@@ -801,10 +809,33 @@ Future<void> _confirmMoveNoteToTrash(
   }
 }
 
-Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) {
+Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) async {
   var checkingForUpdates = false;
-  final session = ref.read(storedSessionProvider).asData?.value;
-  return showModalBottomSheet<void>(
+  var updatingBackgroundSync = false;
+  int? pendingSyncChanges;
+  StoredSession? session;
+  try {
+    session = await ref.read(storedSessionProvider.future);
+  } on Object {
+    // Settings that do not require the account remain available.
+  }
+  var backgroundSyncSettings = BackgroundSyncSettings.defaults;
+  if (session != null) {
+    try {
+      backgroundSyncSettings = await ref
+          .read(backgroundSyncControllerProvider)
+          .loadSettings();
+      pendingSyncChanges = await ref
+          .read(syncServiceProvider)
+          .pendingChangeCount();
+    } on Object {
+      // Keep defaults available if Android secure storage is temporarily busy.
+    }
+  }
+  if (!context.mounted) {
+    return;
+  }
+  await showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
@@ -877,6 +908,166 @@ Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) {
                     );
                   },
                 ),
+                if (session != null) ...[
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.sync_lock_rounded),
+                    title: const Text('Background sync'),
+                    subtitle: Text(
+                      backgroundSyncSettings.enabled
+                          ? _backgroundSyncIntervalLabel(
+                              backgroundSyncSettings.interval,
+                            )
+                          : 'Off',
+                    ),
+                    value: backgroundSyncSettings.enabled,
+                    onChanged: updatingBackgroundSync
+                        ? null
+                        : (enabled) async {
+                            final previous = backgroundSyncSettings;
+                            setSheetState(() {
+                              updatingBackgroundSync = true;
+                              backgroundSyncSettings = previous.copyWith(
+                                enabled: enabled,
+                              );
+                            });
+                            try {
+                              final updated = await ref
+                                  .read(backgroundSyncControllerProvider)
+                                  .updateSettings(
+                                    enabled: enabled,
+                                    interval: previous.interval,
+                                  );
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => backgroundSyncSettings = updated,
+                                );
+                              }
+                            } on Object {
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => backgroundSyncSettings = previous,
+                                );
+                                _showSnackBar(
+                                  context,
+                                  'Could not update background sync.',
+                                );
+                              }
+                            } finally {
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => updatingBackgroundSync = false,
+                                );
+                              }
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 4),
+                  DropdownButtonFormField<Duration>(
+                    key: ValueKey(backgroundSyncSettings.interval),
+                    initialValue: backgroundSyncSettings.interval,
+                    decoration: const InputDecoration(
+                      labelText: 'Sync frequency',
+                      prefixIcon: Icon(Icons.schedule_rounded),
+                    ),
+                    items: [
+                      for (final interval in backgroundSyncIntervals)
+                        DropdownMenuItem(
+                          value: interval,
+                          child: Text(_backgroundSyncIntervalLabel(interval)),
+                        ),
+                    ],
+                    onChanged:
+                        !backgroundSyncSettings.enabled ||
+                            updatingBackgroundSync
+                        ? null
+                        : (interval) async {
+                            if (interval == null) {
+                              return;
+                            }
+                            final previous = backgroundSyncSettings;
+                            setSheetState(() {
+                              updatingBackgroundSync = true;
+                              backgroundSyncSettings = previous.copyWith(
+                                interval: interval,
+                              );
+                            });
+                            try {
+                              final updated = await ref
+                                  .read(backgroundSyncControllerProvider)
+                                  .updateSettings(
+                                    enabled: previous.enabled,
+                                    interval: interval,
+                                  );
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => backgroundSyncSettings = updated,
+                                );
+                              }
+                            } on Object {
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => backgroundSyncSettings = previous,
+                                );
+                                _showSnackBar(
+                                  context,
+                                  'Could not update background sync.',
+                                );
+                              }
+                            } finally {
+                              if (sheetContext.mounted) {
+                                setSheetState(
+                                  () => updatingBackgroundSync = false,
+                                );
+                              }
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Sync status',
+                    style: Theme.of(sheetContext).textTheme.labelLarge,
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.cloud_done_outlined),
+                    title: const Text('Last successful sync'),
+                    subtitle: Text(
+                      _syncTimeLabel(backgroundSyncSettings.lastSuccessfulAt),
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.history_rounded),
+                    title: const Text('Last attempt'),
+                    subtitle: Text(
+                      _syncTimeLabel(backgroundSyncSettings.lastAttemptAt),
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.cloud_upload_outlined),
+                    title: const Text('Pending changes'),
+                    subtitle: Text(
+                      pendingSyncChanges == null
+                          ? 'Unavailable'
+                          : pendingSyncChanges == 0
+                          ? 'Everything is backed up'
+                          : '$pendingSyncChanges waiting to sync',
+                    ),
+                  ),
+                  if (backgroundSyncSettings.lastFailure != null)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        Icons.error_outline_rounded,
+                        color: Theme.of(sheetContext).colorScheme.error,
+                      ),
+                      title: const Text('Last sync problem'),
+                      subtitle: Text(backgroundSyncSettings.lastFailure!),
+                    ),
+                  const SizedBox(height: 4),
+                ],
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.delete_outline_rounded),
@@ -1152,6 +1343,7 @@ class _AccountPageState extends ConsumerState<AccountPage> {
               deviceName: 'Android device',
             );
       ref.invalidate(storedSessionProvider);
+      await _configureBackgroundSyncQuietly(ref);
       if (result.recoveryKey != null && mounted) {
         await _showRecoveryKeyDialog(context, result.recoveryKey!);
       }
@@ -1218,6 +1410,11 @@ class _ConnectedBackupPage extends ConsumerWidget {
             OutlinedButton.icon(
               onPressed: () async {
                 await ref.read(authServiceProvider).logout();
+                try {
+                  await ref.read(backgroundSyncControllerProvider).cancel();
+                } on Object {
+                  // The session is still removed if OS work cancellation fails.
+                }
                 ref.invalidate(storedSessionProvider);
                 if (context.mounted) {
                   Navigator.of(context).pop();
@@ -1388,7 +1585,10 @@ Future<void> _confirmPermanentDelete(
 
 Future<void> _runSync(BuildContext context, WidgetRef ref) async {
   try {
-    final result = await ref.read(syncServiceProvider).sync();
+    final result = await _runTrackedSync(
+      ref.read(syncServiceProvider),
+      ref.read(backgroundSyncSettingsStoreProvider),
+    );
     if (!context.mounted) {
       return;
     }
@@ -1396,6 +1596,7 @@ Future<void> _runSync(BuildContext context, WidgetRef ref) async {
       _showSnackBar(context, 'Connect a backup before syncing.');
       return;
     }
+    await _cancelPendingBackgroundSyncQuietly(ref);
     await _reconcileRemindersQuietly(ref);
     if (!context.mounted) {
       return;
@@ -1419,8 +1620,15 @@ Future<void> _runSync(BuildContext context, WidgetRef ref) async {
 }
 
 Future<void> _syncQuietly(WidgetRef ref) async {
+  await _enqueueBackgroundSyncQuietly(ref);
   try {
-    await ref.read(syncServiceProvider).sync();
+    final result = await _runTrackedSync(
+      ref.read(syncServiceProvider),
+      ref.read(backgroundSyncSettingsStoreProvider),
+    );
+    if (result.connected) {
+      await _cancelPendingBackgroundSyncQuietly(ref);
+    }
   } on Object {
     // Local writes stay local-first. The explicit sync action exposes errors.
   } finally {
@@ -1428,9 +1636,42 @@ Future<void> _syncQuietly(WidgetRef ref) async {
   }
 }
 
-Future<void> _syncServiceQuietly(SyncService service) async {
+Future<void> _configureBackgroundSyncQuietly(WidgetRef ref) async {
   try {
-    await service.sync();
+    await ref.read(backgroundSyncControllerProvider).refreshSchedule();
+  } on Object {
+    // Foreground and manual sync remain available if scheduling fails.
+  }
+}
+
+Future<void> _enqueueBackgroundSyncQuietly(WidgetRef ref) async {
+  try {
+    await ref.read(backgroundSyncControllerProvider).enqueueOneOff();
+  } on Object {
+    // The foreground sync attempt still proceeds.
+  }
+}
+
+Future<void> _cancelPendingBackgroundSyncQuietly(WidgetRef ref) async {
+  try {
+    await ref.read(backgroundSyncControllerProvider).cancelPending();
+  } on Object {
+    // A duplicate fallback sync is safe if cancellation races the OS worker.
+  }
+}
+
+Future<void> _syncServiceQuietly(
+  SyncService service, {
+  BackgroundSyncController? backgroundSync,
+  BackgroundSyncSettingsStore? diagnostics,
+}) async {
+  try {
+    final result = diagnostics == null
+        ? await service.sync()
+        : await _runTrackedSync(service, diagnostics);
+    if (result.connected) {
+      await backgroundSync?.cancelPending();
+    }
   } on Object {
     // Local writes stay available when the optional backup is offline.
   }
@@ -1440,14 +1681,91 @@ Future<void> _syncAndReconcileQuietly(
   SyncService syncService,
   NotesRepository repository,
   ReminderScheduler scheduler,
+  BackgroundSyncController backgroundSync,
+  BackgroundSyncSettingsStore diagnostics,
 ) async {
-  await _syncServiceQuietly(syncService);
+  await _syncServiceQuietly(
+    syncService,
+    backgroundSync: backgroundSync,
+    diagnostics: diagnostics,
+  );
   try {
     final schedules = await repository.loadScheduledReminders();
     await scheduler.reconcileNoteReminders(schedules);
   } on Object {
     // The editor already surfaces direct reminder scheduling failures.
   }
+}
+
+Future<SyncResult> _runTrackedSync(
+  SyncService service,
+  BackgroundSyncSettingsStore diagnostics,
+) async {
+  try {
+    await diagnostics.recordAttempt(DateTime.now());
+  } on Object {
+    // Diagnostics must never prevent encrypted backup.
+  }
+  try {
+    final result = await service.sync();
+    if (result.connected) {
+      try {
+        await diagnostics.recordSuccess(DateTime.now());
+      } on Object {
+        // The encrypted data is already synchronized.
+      }
+    }
+    return result;
+  } on Object catch (error, stackTrace) {
+    try {
+      await diagnostics.recordFailure(DateTime.now(), _syncFailureLabel(error));
+    } on Object {
+      // Preserve the original sync error.
+    }
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+}
+
+String _syncFailureLabel(Object error) {
+  if (error is SyncException) {
+    return error.message;
+  }
+  if (error is SocketException) {
+    return 'Network unavailable.';
+  }
+  if (error is TimeoutException) {
+    return 'Recall backup timed out.';
+  }
+  if (error is HttpException) {
+    return 'Could not reach Recall backup.';
+  }
+  return 'Sync could not finish.';
+}
+
+String _syncTimeLabel(DateTime? time) {
+  if (time == null) {
+    return 'Never';
+  }
+  final now = DateTime.now();
+  final difference = now.difference(time);
+  if (difference.isNegative || difference.inMinutes < 1) {
+    return 'Just now';
+  }
+  if (difference.inMinutes < 60) {
+    return '${difference.inMinutes} minute${difference.inMinutes == 1 ? '' : 's'} ago';
+  }
+  if (difference.inHours < 24) {
+    return '${difference.inHours} hour${difference.inHours == 1 ? '' : 's'} ago';
+  }
+  if (difference.inDays < 7) {
+    return '${difference.inDays} day${difference.inDays == 1 ? '' : 's'} ago';
+  }
+  final local = time.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.year}-$month-$day $hour:$minute';
 }
 
 Future<void> _reconcileRemindersQuietly(WidgetRef ref) async {
@@ -1644,6 +1962,19 @@ String _formatBytes(int bytes) {
     return '${(bytes / 1024).toStringAsFixed(1)} KB';
   }
   return '$bytes B';
+}
+
+String _backgroundSyncIntervalLabel(Duration interval) {
+  if (interval == const Duration(hours: 24)) {
+    return 'Daily';
+  }
+  if (interval.inMinutes < 60) {
+    return 'Every ${interval.inMinutes} minutes';
+  }
+  if (interval == const Duration(hours: 1)) {
+    return 'Every hour';
+  }
+  return 'Every ${interval.inHours} hours';
 }
 
 void _showSnackBar(
@@ -2231,7 +2562,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                     await repository.restoreNote(noteId);
                     final schedules = await repository.loadScheduledReminders();
                     await scheduler.reconcileNoteReminders(schedules);
-                    await syncService.sync();
+                    await _enqueueBackgroundSyncQuietly(ref);
+                    await _syncServiceQuietly(
+                      syncService,
+                      backgroundSync: ref.read(
+                        backgroundSyncControllerProvider,
+                      ),
+                      diagnostics: ref.read(
+                        backgroundSyncSettingsStoreProvider,
+                      ),
+                    );
                   } on Object {
                     // The local restore succeeds even when backup is offline.
                   }
@@ -2241,7 +2581,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           ),
         ),
       );
-    unawaited(_syncServiceQuietly(syncService));
+    unawaited(
+      (() async {
+        await _enqueueBackgroundSyncQuietly(ref);
+        await _syncServiceQuietly(
+          syncService,
+          backgroundSync: ref.read(backgroundSyncControllerProvider),
+          diagnostics: ref.read(backgroundSyncSettingsStoreProvider),
+        );
+      })(),
+    );
   }
 
   Future<void> _discardNewNote() async {
@@ -2341,7 +2690,18 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       }
       if (mounted) {
         _dirty = false;
-        unawaited(_syncAndReconcileQuietly(syncService, repository, scheduler));
+        unawaited(
+          (() async {
+            await _enqueueBackgroundSyncQuietly(ref);
+            await _syncAndReconcileQuietly(
+              syncService,
+              repository,
+              scheduler,
+              ref.read(backgroundSyncControllerProvider),
+              ref.read(backgroundSyncSettingsStoreProvider),
+            );
+          })(),
+        );
         final messenger = ScaffoldMessenger.of(context);
         Navigator.of(context).pop();
         if (reminderProblem) {

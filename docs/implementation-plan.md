@@ -262,7 +262,7 @@ prep still needs broader on-device and multi-device integration testing.
 - Add tombstone sync.
 - Add conflict preservation.
 - Add manual sync trigger in the app.
-- Add basic automatic sync when online.
+- Add configurable periodic background sync when online.
 
 ### Milestone 7: Deployment Hardening
 

@@ -94,6 +94,7 @@ class ReminderScheduler {
     required String title,
     required String body,
     required NoteReminder reminder,
+    bool requestPermissions = true,
   }) async {
     await _ensureInitialized();
 
@@ -108,7 +109,9 @@ class ReminderScheduler {
     final details = _notificationDetails(body);
     final scheduledDate = _toScheduledDate(reminder.nextFireAt);
     final matchComponents = _matchComponentsFor(reminder.recurrence);
-    final scheduleMode = await _androidScheduleMode();
+    final scheduleMode = await _androidScheduleMode(
+      requestPermissions: requestPermissions,
+    );
 
     await _notifications.cancel(id: id);
     try {
@@ -177,8 +180,9 @@ class ReminderScheduler {
   }
 
   Future<void> reconcileNoteReminders(
-    List<ScheduledNoteReminder> schedules,
-  ) async {
+    List<ScheduledNoteReminder> schedules, {
+    bool requestPermissions = true,
+  }) async {
     await _ensureInitialized();
     final desiredIds = schedules
         .map((schedule) => notificationIdForNote(schedule.noteId))
@@ -202,8 +206,9 @@ class ReminderScheduler {
         title: schedule.title,
         body: schedule.body,
         reminder: schedule.reminder,
+        requestPermissions: requestPermissions,
       );
-      await scheduleSnooze(schedule);
+      await scheduleSnooze(schedule, requestPermissions: requestPermissions);
     }
   }
 

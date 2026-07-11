@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dynamic_color/samples.dart';
 import 'package:dynamic_color/test_utils.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +15,7 @@ import 'package:recall_app/src/notes/notes_repository.dart';
 import 'package:recall_app/src/providers.dart';
 import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 import 'package:recall_app/src/sync/sync_service.dart';
+import 'package:recall_app/src/sync/background_sync.dart';
 import 'package:recall_app/src/updates/update_service.dart';
 
 void main() {
@@ -256,6 +258,54 @@ void main() {
     expect(find.text('Backup URL'), findsOneWidget);
     expect(find.text('Use a recovery key'), findsOneWidget);
   });
+
+  testWidgets('settings exposes configurable background sync', (tester) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final session = StoredSession(
+      account: const StoredAccount(
+        serverUrl: 'https://example.com',
+        userId: 'user-id',
+        email: 'user@example.com',
+        deviceId: 'device-id',
+      ),
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      masterKey: SecretKeyData(List<int>.filled(32, 1)),
+    );
+    final backgroundSync = BackgroundSyncController(
+      settingsStore: BackgroundSyncSettingsStore(
+        storage: _MemoryBackgroundSyncStorage(),
+      ),
+      scheduler: _NoopBackgroundWorkScheduler(),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(sampleNotes)),
+          storedSessionProvider.overrideWith((ref) async => session),
+          syncServiceProvider.overrideWithValue(
+            _NoopSyncService(database, pendingCount: 2),
+          ),
+          backgroundSyncControllerProvider.overrideWithValue(backgroundSync),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Background sync'), findsOneWidget);
+    expect(find.text('Sync frequency'), findsOneWidget);
+    expect(find.text('Every hour'), findsWidgets);
+    expect(find.text('Last successful sync'), findsOneWidget);
+    expect(find.text('Last attempt'), findsOneWidget);
+    expect(find.text('2 waiting to sync'), findsOneWidget);
+  });
 }
 
 class _NoUpdateService extends UpdateService {
@@ -290,8 +340,9 @@ class _NoopReminderScheduler extends ReminderScheduler {
 
   @override
   Future<void> reconcileNoteReminders(
-    List<ScheduledNoteReminder> schedules,
-  ) async {}
+    List<ScheduledNoteReminder> schedules, {
+    bool requestPermissions = true,
+  }) async {}
 
   @override
   Future<void> scheduleNoteReminder({
@@ -299,6 +350,7 @@ class _NoopReminderScheduler extends ReminderScheduler {
     required String title,
     required String body,
     required NoteReminder reminder,
+    bool requestPermissions = true,
   }) async {}
 
   @override
@@ -309,9 +361,40 @@ class _NoopReminderScheduler extends ReminderScheduler {
 }
 
 class _NoopSyncService extends SyncService {
-  _NoopSyncService(LocalDatabase database)
+  _NoopSyncService(LocalDatabase database, {this.pendingCount = 0})
     : super(database, SecureAccountStore());
+
+  final int pendingCount;
 
   @override
   Future<SyncResult> sync() async => const SyncResult(connected: false);
+
+  @override
+  Future<int> pendingChangeCount() async => pendingCount;
+}
+
+class _MemoryBackgroundSyncStorage implements BackgroundSyncStorage {
+  final Map<String, String> values = {};
+
+  @override
+  Future<String?> read(String key) async => values[key];
+
+  @override
+  Future<void> write(String key, String value) async {
+    values[key] = value;
+  }
+}
+
+class _NoopBackgroundWorkScheduler implements BackgroundWorkScheduler {
+  @override
+  Future<void> cancel() async {}
+
+  @override
+  Future<void> cancelOneOff() async {}
+
+  @override
+  Future<void> enqueueOneOff() async {}
+
+  @override
+  Future<void> schedulePeriodic(Duration interval) async {}
 }

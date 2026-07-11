@@ -8,6 +8,7 @@ import 'notes/note_models.dart';
 import 'notes/notes_repository.dart';
 import 'reminders/reminder_scheduler.dart';
 import 'sync/sync_service.dart';
+import 'sync/background_sync.dart';
 import 'updates/apk_installer.dart';
 import 'updates/update_service.dart';
 
@@ -52,6 +53,20 @@ final syncServiceProvider = Provider<SyncService>((ref) {
   return SyncService(
     ref.watch(localDatabaseProvider),
     ref.watch(secureAccountStoreProvider),
+  );
+});
+
+final backgroundSyncSettingsStoreProvider =
+    Provider<BackgroundSyncSettingsStore>((ref) {
+      return BackgroundSyncSettingsStore();
+    });
+
+final backgroundSyncControllerProvider = Provider<BackgroundSyncController>((
+  ref,
+) {
+  return BackgroundSyncController(
+    settingsStore: ref.watch(backgroundSyncSettingsStoreProvider),
+    accountStore: ref.watch(secureAccountStoreProvider),
   );
 });
 

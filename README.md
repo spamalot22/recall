@@ -11,7 +11,8 @@ Dockerized Node/Fastify/PostgreSQL backend.
 Implemented client features include text notes, checklists, search, pinning,
 archive, trash, Material You theming, locally inferred colour moods with manual
 overrides, recurring reminders, encrypted account setup, password recovery
-keys, automatic/manual sync, conflict copies, and signed in-app APK updates.
+keys, configurable periodic background sync, manual sync, conflict copies, and
+signed in-app APK updates.
 
 ## Layout
 
