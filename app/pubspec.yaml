@@ -71,6 +71,9 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  assets:
+    - assets/models/recall_goemotions_v1.bin
+
 hooks:
   user_defines:
     sqlite3:

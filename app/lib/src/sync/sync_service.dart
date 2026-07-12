@@ -311,6 +311,8 @@ class SyncService {
             'noteType': note.noteType,
             'mood': note.mood,
             'moodIsAutomatic': note.moodIsAutomatic,
+            'moodConfidence': note.moodConfidence,
+            'moodModelVersion': note.moodModelVersion,
             'isPinned': note.isPinned,
             'isArchived': note.isArchived,
             'trashedAt': note.trashedAt?.toUtc().toIso8601String(),
@@ -498,7 +500,12 @@ class SyncService {
           'routine',
           'errand',
           'joyful',
+          'warm',
+          'calm',
           'reflective',
+          'tense',
+          'intense',
+          'surprised',
         }.contains(mood)) {
       throw const SyncException('Encrypted note record is invalid.');
     }
@@ -520,6 +527,12 @@ class SyncService {
         moodIsAutomatic: Value(
           _optionalBool(note, 'moodIsAutomatic', fallback: false),
         ),
+        moodConfidence: Value(
+          _optionalDouble(note, 'moodConfidence', fallback: 0),
+        ),
+        moodModelVersion: Value(
+          _optionalInt(note, 'moodModelVersion', fallback: 0),
+        ),
         isPinned: Value(_requiredBool(note, 'isPinned')),
         isArchived: Value(
           conflictCopy ? false : _requiredBool(note, 'isArchived'),
@@ -539,6 +552,12 @@ class SyncService {
                 mood: Value(mood),
                 moodIsAutomatic: Value(
                   _optionalBool(note, 'moodIsAutomatic', fallback: false),
+                ),
+                moodConfidence: Value(
+                  _optionalDouble(note, 'moodConfidence', fallback: 0),
+                ),
+                moodModelVersion: Value(
+                  _optionalInt(note, 'moodModelVersion', fallback: 0),
                 ),
                 isPinned: Value(_requiredBool(note, 'isPinned')),
                 isArchived: Value(
@@ -787,6 +806,32 @@ class SyncService {
       throw const SyncException('Encrypted note record is invalid.');
     }
     return item;
+  }
+
+  int _optionalInt(
+    Map<String, Object?> value,
+    String key, {
+    required int fallback,
+  }) {
+    final item = value[key];
+    if (item == null) return fallback;
+    if (item is! int || item < 0 || item > 1000000) {
+      throw const SyncException('Encrypted note record is invalid.');
+    }
+    return item;
+  }
+
+  double _optionalDouble(
+    Map<String, Object?> value,
+    String key, {
+    required double fallback,
+  }) {
+    final item = value[key];
+    if (item == null) return fallback;
+    if (item is! num || !item.isFinite || item < 0 || item > 1) {
+      throw const SyncException('Encrypted note record is invalid.');
+    }
+    return item.toDouble();
   }
 
   DateTime _requiredDate(Map<String, Object?> value, String key) {

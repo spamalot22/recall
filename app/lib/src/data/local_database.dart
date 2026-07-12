@@ -17,6 +17,8 @@ class Notes extends Table {
   TextColumn get mood => text().withDefault(const Constant('clear'))();
   BoolColumn get moodIsAutomatic =>
       boolean().withDefault(const Constant(true))();
+  RealColumn get moodConfidence => real().withDefault(const Constant(0))();
+  IntColumn get moodModelVersion => integer().withDefault(const Constant(0))();
   BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
   BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
   DateTimeColumn get trashedAt => dateTime().nullable()();
@@ -102,7 +104,7 @@ class LocalDatabase extends _$LocalDatabase {
   LocalDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -110,6 +112,10 @@ class LocalDatabase extends _$LocalDatabase {
     onUpgrade: (migrator, from, to) async {
       if (from < 2) {
         await migrator.addColumn(notes, notes.moodIsAutomatic);
+      }
+      if (from < 3) {
+        await migrator.addColumn(notes, notes.moodConfidence);
+        await migrator.addColumn(notes, notes.moodModelVersion);
       }
     },
   );

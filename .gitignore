@@ -25,6 +25,10 @@ server/.env
 *.log
 npm-debug.log*
 
+# Python model tooling
+__pycache__/
+*.py[cod]
+
 # Docker/local data
 .env
 /data/

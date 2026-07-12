@@ -2011,19 +2011,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final mood = _moodWasPicked
-        ? _mood
-        : automaticMoodForNote(
-            title: _titleController.text,
-            body: _bodyController.text,
-            checklistItems: _checklistItems.map((item) => item.controller.text),
-            reminder: _reminderAt == null
-                ? null
-                : NoteReminder(
-                    nextFireAt: _reminderAt!,
-                    recurrence: _recurrence,
-                  ),
-          );
+    final mood = _mood;
     final moodColors = mood.resolve(Theme.of(context).colorScheme);
     final unavailable = _saving || _loading || _missing;
 
@@ -2035,6 +2023,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         }
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: moodColors.background,
         appBar: AppBar(
           backgroundColor: moodColors.background,
@@ -2222,62 +2211,78 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         ),
         bottomNavigationBar: _loading || _missing
             ? null
-            : Material(
-                color: Theme.of(context).colorScheme.surface,
-                surfaceTintColor: Colors.transparent,
-                elevation: 8,
-                child: SafeArea(
-                  top: false,
-                  child: SizedBox(
-                    height: 56,
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 8),
-                        IconButton(
-                          tooltip: _reminderAt == null
-                              ? 'Add reminder'
-                              : 'Edit reminder',
-                          onPressed: unavailable ? null : _editReminder,
-                          icon: Icon(
-                            _reminderAt == null
-                                ? Icons.notifications_none_rounded
-                                : Icons.notifications_active_rounded,
-                            color: _reminderAt == null
-                                ? null
-                                : moodColors.accent,
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: _isChecklist
-                              ? 'Convert checklist to text'
-                              : 'Add checklist',
-                          onPressed: unavailable ? null : _toggleChecklist,
-                          icon: Icon(
-                            Icons.checklist_rounded,
-                            color: _isChecklist ? moodColors.accent : null,
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Choose colour mood',
-                          onPressed: unavailable ? null : _pickMood,
-                          icon: Icon(
-                            Icons.palette_outlined,
-                            color: moodColors.accent,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (_moodWasPicked)
+            : AnimatedPadding(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.viewInsetsOf(context).bottom,
+                ),
+                child: Material(
+                  color: Theme.of(context).colorScheme.surface,
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 8,
+                  child: SafeArea(
+                    top: false,
+                    child: SizedBox(
+                      height: 56,
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 8),
                           IconButton(
-                            tooltip: 'Use automatic colour',
+                            tooltip: _reminderAt == null
+                                ? 'Add reminder'
+                                : 'Edit reminder',
+                            onPressed: unavailable ? null : _editReminder,
+                            icon: Icon(
+                              _reminderAt == null
+                                  ? Icons.notifications_none_rounded
+                                  : Icons.notifications_active_rounded,
+                              color: _reminderAt == null
+                                  ? null
+                                  : moodColors.accent,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: _isChecklist
+                                ? 'Convert checklist to text'
+                                : 'Add checklist',
                             onPressed: unavailable
                                 ? null
-                                : () => _updateDraft(
-                                    () => _moodWasPicked = false,
-                                  ),
-                            icon: const Icon(Icons.auto_awesome_outlined),
+                                : () {
+                                    FocusScope.of(context).unfocus();
+                                    _toggleChecklist(requestFocus: false);
+                                  },
+                            icon: Icon(
+                              Icons.checklist_rounded,
+                              color: _isChecklist ? moodColors.accent : null,
+                            ),
                           ),
-                        const SizedBox(width: 8),
-                      ],
+                          IconButton(
+                            tooltip: 'Choose colour mood',
+                            onPressed: unavailable ? null : _pickMood,
+                            icon: Icon(
+                              Icons.palette_outlined,
+                              color: moodColors.accent,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_moodWasPicked)
+                            IconButton(
+                              tooltip: 'Use automatic colour',
+                              onPressed: unavailable
+                                  ? null
+                                  : () {
+                                      FocusScope.of(context).unfocus();
+                                      _updateDraft(() {
+                                        _moodWasPicked = false;
+                                        _mood = ColorMood.clear;
+                                      });
+                                    },
+                              icon: const Icon(Icons.auto_awesome_outlined),
+                            ),
+                          const SizedBox(width: 8),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -2292,17 +2297,19 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     }
   }
 
-  void _addChecklistItem() {
+  void _addChecklistItem({bool requestFocus = true}) {
     final item = _ChecklistDraft();
     _updateDraft(() {
       _isChecklist = true;
       _checklistItems.add(item);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        item.focusNode.requestFocus();
-      }
-    });
+    if (requestFocus) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          item.focusNode.requestFocus();
+        }
+      });
+    }
   }
 
   void _advanceChecklist(int index) {
@@ -2322,9 +2329,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     item.dispose();
   }
 
-  void _toggleChecklist() {
+  void _toggleChecklist({bool requestFocus = true}) {
     if (!_isChecklist) {
-      _addChecklistItem();
+      _addChecklistItem(requestFocus: requestFocus);
       return;
     }
 
@@ -2349,7 +2356,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       }
       _checklistItems.clear();
     });
-    _bodyFocusNode.requestFocus();
+    if (requestFocus) {
+      _bodyFocusNode.requestFocus();
+    }
   }
 
   Future<void> _editReminder() async {
@@ -2383,6 +2392,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       _moodWasPicked = selection.mood != null;
       if (selection.mood != null) {
         _mood = selection.mood!;
+      } else {
+        _mood = ColorMood.clear;
       }
     });
   }

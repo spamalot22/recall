@@ -32,7 +32,7 @@ void main() {
     expect(notes.single.mood, ColorMood.errand);
   });
 
-  test('re-evaluates previously stored automatic moods for previews', () async {
+  test('uses the persisted automatic mood for stable previews', () async {
     await repository.createTextNote(
       title: 'Buy groceries',
       body: 'Pick up milk',
@@ -43,7 +43,7 @@ void main() {
 
     final preview = await repository.watchNotePreviews().first;
 
-    expect(preview.single.mood, ColorMood.errand);
+    expect(preview.single.mood, ColorMood.clear);
   });
 
   test(
@@ -58,6 +58,9 @@ void main() {
       expect(loaded?.title, isEmpty);
       expect(loaded?.mood, ColorMood.errand);
       expect(loaded?.moodIsAutomatic, isTrue);
+      var stored = await database.select(database.notes).getSingle();
+      expect(stored.moodModelVersion, 1);
+      expect(stored.moodConfidence, inInclusiveRange(0, 1));
 
       await repository.updateTextNote(
         id: noteId,
@@ -80,6 +83,9 @@ void main() {
       loaded = await repository.loadNoteForEditing(noteId);
       expect(loaded?.mood, ColorMood.urgent);
       expect(loaded?.moodIsAutomatic, isFalse);
+      stored = await database.select(database.notes).getSingle();
+      expect(stored.moodModelVersion, 0);
+      expect(stored.moodConfidence, 1);
     },
   );
 

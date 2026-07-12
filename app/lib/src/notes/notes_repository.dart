@@ -2,13 +2,17 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../data/local_database.dart';
+import 'mood_analyzer.dart';
 import 'note_models.dart';
 
 class NotesRepository {
-  NotesRepository(this._db, {Uuid? uuid}) : _uuid = uuid ?? const Uuid();
+  NotesRepository(this._db, {Uuid? uuid, MoodAnalyzer? moodAnalyzer})
+    : _uuid = uuid ?? const Uuid(),
+      _moodAnalyzer = moodAnalyzer ?? RecallMoodAnalyzer();
 
   final LocalDatabase _db;
   final Uuid _uuid;
+  final MoodAnalyzer _moodAnalyzer;
 
   Stream<List<NotePreview>> watchNotePreviews() {
     final query = _db.select(_db.notes)
@@ -32,21 +36,12 @@ class NotesRepository {
                   ]))
                 .get();
         final reminder = await _firstEnabledReminder(note.id);
-        final checklistDrafts = checklistItems.map((item) => item.content);
-
         previews.add(
           NotePreview(
             id: note.id,
             title: note.title,
             body: note.body,
-            mood: note.moodIsAutomatic
-                ? automaticMoodForNote(
-                    title: note.title,
-                    body: note.body,
-                    checklistItems: checklistDrafts,
-                    reminder: reminder,
-                  )
-                : ColorMood.fromName(note.mood),
+            mood: ColorMood.fromName(note.mood),
             reminderLabel: _formatReminderLabel(reminder),
             checklistItems: checklistItems
                 .map(
@@ -78,6 +73,14 @@ class NotesRepository {
     final id = _uuid.v7();
     final trimmedTitle = title.trim();
     final trimmedBody = body.trim();
+    final analysis = mood == null
+        ? await _moodAnalyzer.analyze(
+            title: trimmedTitle,
+            body: trimmedBody,
+            checklistItems: checklistItems.map((item) => item.text),
+            reminder: reminder,
+          )
+        : null;
 
     await _db.transaction(() async {
       await _db
@@ -88,19 +91,10 @@ class NotesRepository {
               title: Value(trimmedTitle),
               body: Value(trimmedBody),
               noteType: const Value('text'),
-              mood: Value(
-                (mood ??
-                        automaticMoodForNote(
-                          title: trimmedTitle,
-                          body: trimmedBody,
-                          checklistItems: checklistItems.map(
-                            (item) => item.text,
-                          ),
-                          reminder: reminder,
-                        ))
-                    .name,
-              ),
+              mood: Value((mood ?? analysis!.mood).name),
               moodIsAutomatic: Value(mood == null),
+              moodConfidence: Value(analysis?.confidence ?? 1),
+              moodModelVersion: Value(analysis?.modelVersion ?? 0),
               isPinned: Value(pinned),
               createdAt: now,
               updatedAt: now,
@@ -160,23 +154,24 @@ class NotesRepository {
     final now = DateTime.now().toUtc();
     final trimmedTitle = title.trim();
     final trimmedBody = body.trim();
+    final analysis = mood == null
+        ? await _moodAnalyzer.analyze(
+            title: trimmedTitle,
+            body: trimmedBody,
+            checklistItems: checklistItems.map((item) => item.text),
+            reminder: reminder,
+          )
+        : null;
 
     await _db.transaction(() async {
       await (_db.update(_db.notes)..where((note) => note.id.equals(id))).write(
         NotesCompanion(
           title: Value(trimmedTitle),
           body: Value(trimmedBody),
-          mood: Value(
-            (mood ??
-                    automaticMoodForNote(
-                      title: trimmedTitle,
-                      body: trimmedBody,
-                      checklistItems: checklistItems.map((item) => item.text),
-                      reminder: reminder,
-                    ))
-                .name,
-          ),
+          mood: Value((mood ?? analysis!.mood).name),
           moodIsAutomatic: Value(mood == null),
+          moodConfidence: Value(analysis?.confidence ?? 1),
+          moodModelVersion: Value(analysis?.modelVersion ?? 0),
           isPinned: Value(pinned),
           updatedAt: Value(now),
         ),
@@ -351,14 +346,7 @@ class NotesRepository {
           id: note.id,
           title: note.title,
           body: note.body,
-          mood: note.moodIsAutomatic
-              ? automaticMoodForNote(
-                  title: note.title,
-                  body: note.body,
-                  checklistItems: checklistItems.map((item) => item.content),
-                  reminder: reminder,
-                )
-              : ColorMood.fromName(note.mood),
+          mood: ColorMood.fromName(note.mood),
           reminderLabel: _formatReminderLabel(reminder),
           checklistItems: checklistItems
               .map(

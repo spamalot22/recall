@@ -74,6 +74,30 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _moodConfidenceMeta = const VerificationMeta(
+    'moodConfidence',
+  );
+  @override
+  late final GeneratedColumn<double> moodConfidence = GeneratedColumn<double>(
+    'mood_confidence',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _moodModelVersionMeta = const VerificationMeta(
+    'moodModelVersion',
+  );
+  @override
+  late final GeneratedColumn<int> moodModelVersion = GeneratedColumn<int>(
+    'mood_model_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   static const VerificationMeta _isPinnedMeta = const VerificationMeta(
     'isPinned',
   );
@@ -145,6 +169,8 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     noteType,
     mood,
     moodIsAutomatic,
+    moodConfidence,
+    moodModelVersion,
     isPinned,
     isArchived,
     trashedAt,
@@ -198,6 +224,24 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
         moodIsAutomatic.isAcceptableOrUnknown(
           data['mood_is_automatic']!,
           _moodIsAutomaticMeta,
+        ),
+      );
+    }
+    if (data.containsKey('mood_confidence')) {
+      context.handle(
+        _moodConfidenceMeta,
+        moodConfidence.isAcceptableOrUnknown(
+          data['mood_confidence']!,
+          _moodConfidenceMeta,
+        ),
+      );
+    }
+    if (data.containsKey('mood_model_version')) {
+      context.handle(
+        _moodModelVersionMeta,
+        moodModelVersion.isAcceptableOrUnknown(
+          data['mood_model_version']!,
+          _moodModelVersionMeta,
         ),
       );
     }
@@ -268,6 +312,14 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
         DriftSqlType.bool,
         data['${effectivePrefix}mood_is_automatic'],
       )!,
+      moodConfidence: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}mood_confidence'],
+      )!,
+      moodModelVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}mood_model_version'],
+      )!,
       isPinned: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_pinned'],
@@ -304,6 +356,8 @@ class Note extends DataClass implements Insertable<Note> {
   final String noteType;
   final String mood;
   final bool moodIsAutomatic;
+  final double moodConfidence;
+  final int moodModelVersion;
   final bool isPinned;
   final bool isArchived;
   final DateTime? trashedAt;
@@ -316,6 +370,8 @@ class Note extends DataClass implements Insertable<Note> {
     required this.noteType,
     required this.mood,
     required this.moodIsAutomatic,
+    required this.moodConfidence,
+    required this.moodModelVersion,
     required this.isPinned,
     required this.isArchived,
     this.trashedAt,
@@ -331,6 +387,8 @@ class Note extends DataClass implements Insertable<Note> {
     map['note_type'] = Variable<String>(noteType);
     map['mood'] = Variable<String>(mood);
     map['mood_is_automatic'] = Variable<bool>(moodIsAutomatic);
+    map['mood_confidence'] = Variable<double>(moodConfidence);
+    map['mood_model_version'] = Variable<int>(moodModelVersion);
     map['is_pinned'] = Variable<bool>(isPinned);
     map['is_archived'] = Variable<bool>(isArchived);
     if (!nullToAbsent || trashedAt != null) {
@@ -349,6 +407,8 @@ class Note extends DataClass implements Insertable<Note> {
       noteType: Value(noteType),
       mood: Value(mood),
       moodIsAutomatic: Value(moodIsAutomatic),
+      moodConfidence: Value(moodConfidence),
+      moodModelVersion: Value(moodModelVersion),
       isPinned: Value(isPinned),
       isArchived: Value(isArchived),
       trashedAt: trashedAt == null && nullToAbsent
@@ -371,6 +431,8 @@ class Note extends DataClass implements Insertable<Note> {
       noteType: serializer.fromJson<String>(json['noteType']),
       mood: serializer.fromJson<String>(json['mood']),
       moodIsAutomatic: serializer.fromJson<bool>(json['moodIsAutomatic']),
+      moodConfidence: serializer.fromJson<double>(json['moodConfidence']),
+      moodModelVersion: serializer.fromJson<int>(json['moodModelVersion']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       isArchived: serializer.fromJson<bool>(json['isArchived']),
       trashedAt: serializer.fromJson<DateTime?>(json['trashedAt']),
@@ -388,6 +450,8 @@ class Note extends DataClass implements Insertable<Note> {
       'noteType': serializer.toJson<String>(noteType),
       'mood': serializer.toJson<String>(mood),
       'moodIsAutomatic': serializer.toJson<bool>(moodIsAutomatic),
+      'moodConfidence': serializer.toJson<double>(moodConfidence),
+      'moodModelVersion': serializer.toJson<int>(moodModelVersion),
       'isPinned': serializer.toJson<bool>(isPinned),
       'isArchived': serializer.toJson<bool>(isArchived),
       'trashedAt': serializer.toJson<DateTime?>(trashedAt),
@@ -403,6 +467,8 @@ class Note extends DataClass implements Insertable<Note> {
     String? noteType,
     String? mood,
     bool? moodIsAutomatic,
+    double? moodConfidence,
+    int? moodModelVersion,
     bool? isPinned,
     bool? isArchived,
     Value<DateTime?> trashedAt = const Value.absent(),
@@ -415,6 +481,8 @@ class Note extends DataClass implements Insertable<Note> {
     noteType: noteType ?? this.noteType,
     mood: mood ?? this.mood,
     moodIsAutomatic: moodIsAutomatic ?? this.moodIsAutomatic,
+    moodConfidence: moodConfidence ?? this.moodConfidence,
+    moodModelVersion: moodModelVersion ?? this.moodModelVersion,
     isPinned: isPinned ?? this.isPinned,
     isArchived: isArchived ?? this.isArchived,
     trashedAt: trashedAt.present ? trashedAt.value : this.trashedAt,
@@ -431,6 +499,12 @@ class Note extends DataClass implements Insertable<Note> {
       moodIsAutomatic: data.moodIsAutomatic.present
           ? data.moodIsAutomatic.value
           : this.moodIsAutomatic,
+      moodConfidence: data.moodConfidence.present
+          ? data.moodConfidence.value
+          : this.moodConfidence,
+      moodModelVersion: data.moodModelVersion.present
+          ? data.moodModelVersion.value
+          : this.moodModelVersion,
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       isArchived: data.isArchived.present
           ? data.isArchived.value
@@ -450,6 +524,8 @@ class Note extends DataClass implements Insertable<Note> {
           ..write('noteType: $noteType, ')
           ..write('mood: $mood, ')
           ..write('moodIsAutomatic: $moodIsAutomatic, ')
+          ..write('moodConfidence: $moodConfidence, ')
+          ..write('moodModelVersion: $moodModelVersion, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
           ..write('trashedAt: $trashedAt, ')
@@ -467,6 +543,8 @@ class Note extends DataClass implements Insertable<Note> {
     noteType,
     mood,
     moodIsAutomatic,
+    moodConfidence,
+    moodModelVersion,
     isPinned,
     isArchived,
     trashedAt,
@@ -483,6 +561,8 @@ class Note extends DataClass implements Insertable<Note> {
           other.noteType == this.noteType &&
           other.mood == this.mood &&
           other.moodIsAutomatic == this.moodIsAutomatic &&
+          other.moodConfidence == this.moodConfidence &&
+          other.moodModelVersion == this.moodModelVersion &&
           other.isPinned == this.isPinned &&
           other.isArchived == this.isArchived &&
           other.trashedAt == this.trashedAt &&
@@ -497,6 +577,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
   final Value<String> noteType;
   final Value<String> mood;
   final Value<bool> moodIsAutomatic;
+  final Value<double> moodConfidence;
+  final Value<int> moodModelVersion;
   final Value<bool> isPinned;
   final Value<bool> isArchived;
   final Value<DateTime?> trashedAt;
@@ -510,6 +592,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.noteType = const Value.absent(),
     this.mood = const Value.absent(),
     this.moodIsAutomatic = const Value.absent(),
+    this.moodConfidence = const Value.absent(),
+    this.moodModelVersion = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
     this.trashedAt = const Value.absent(),
@@ -524,6 +608,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.noteType = const Value.absent(),
     this.mood = const Value.absent(),
     this.moodIsAutomatic = const Value.absent(),
+    this.moodConfidence = const Value.absent(),
+    this.moodModelVersion = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
     this.trashedAt = const Value.absent(),
@@ -540,6 +626,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Expression<String>? noteType,
     Expression<String>? mood,
     Expression<bool>? moodIsAutomatic,
+    Expression<double>? moodConfidence,
+    Expression<int>? moodModelVersion,
     Expression<bool>? isPinned,
     Expression<bool>? isArchived,
     Expression<DateTime>? trashedAt,
@@ -554,6 +642,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
       if (noteType != null) 'note_type': noteType,
       if (mood != null) 'mood': mood,
       if (moodIsAutomatic != null) 'mood_is_automatic': moodIsAutomatic,
+      if (moodConfidence != null) 'mood_confidence': moodConfidence,
+      if (moodModelVersion != null) 'mood_model_version': moodModelVersion,
       if (isPinned != null) 'is_pinned': isPinned,
       if (isArchived != null) 'is_archived': isArchived,
       if (trashedAt != null) 'trashed_at': trashedAt,
@@ -570,6 +660,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Value<String>? noteType,
     Value<String>? mood,
     Value<bool>? moodIsAutomatic,
+    Value<double>? moodConfidence,
+    Value<int>? moodModelVersion,
     Value<bool>? isPinned,
     Value<bool>? isArchived,
     Value<DateTime?>? trashedAt,
@@ -584,6 +676,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
       noteType: noteType ?? this.noteType,
       mood: mood ?? this.mood,
       moodIsAutomatic: moodIsAutomatic ?? this.moodIsAutomatic,
+      moodConfidence: moodConfidence ?? this.moodConfidence,
+      moodModelVersion: moodModelVersion ?? this.moodModelVersion,
       isPinned: isPinned ?? this.isPinned,
       isArchived: isArchived ?? this.isArchived,
       trashedAt: trashedAt ?? this.trashedAt,
@@ -613,6 +707,12 @@ class NotesCompanion extends UpdateCompanion<Note> {
     }
     if (moodIsAutomatic.present) {
       map['mood_is_automatic'] = Variable<bool>(moodIsAutomatic.value);
+    }
+    if (moodConfidence.present) {
+      map['mood_confidence'] = Variable<double>(moodConfidence.value);
+    }
+    if (moodModelVersion.present) {
+      map['mood_model_version'] = Variable<int>(moodModelVersion.value);
     }
     if (isPinned.present) {
       map['is_pinned'] = Variable<bool>(isPinned.value);
@@ -644,6 +744,8 @@ class NotesCompanion extends UpdateCompanion<Note> {
           ..write('noteType: $noteType, ')
           ..write('mood: $mood, ')
           ..write('moodIsAutomatic: $moodIsAutomatic, ')
+          ..write('moodConfidence: $moodConfidence, ')
+          ..write('moodModelVersion: $moodModelVersion, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
           ..write('trashedAt: $trashedAt, ')
@@ -3076,6 +3178,8 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<String> noteType,
       Value<String> mood,
       Value<bool> moodIsAutomatic,
+      Value<double> moodConfidence,
+      Value<int> moodModelVersion,
       Value<bool> isPinned,
       Value<bool> isArchived,
       Value<DateTime?> trashedAt,
@@ -3091,6 +3195,8 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<String> noteType,
       Value<String> mood,
       Value<bool> moodIsAutomatic,
+      Value<double> moodConfidence,
+      Value<int> moodModelVersion,
       Value<bool> isPinned,
       Value<bool> isArchived,
       Value<DateTime?> trashedAt,
@@ -3176,6 +3282,16 @@ class $$NotesTableFilterComposer
 
   ColumnFilters<bool> get moodIsAutomatic => $composableBuilder(
     column: $table.moodIsAutomatic,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get moodConfidence => $composableBuilder(
+    column: $table.moodConfidence,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get moodModelVersion => $composableBuilder(
+    column: $table.moodModelVersion,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3294,6 +3410,16 @@ class $$NotesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<double> get moodConfidence => $composableBuilder(
+    column: $table.moodConfidence,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get moodModelVersion => $composableBuilder(
+    column: $table.moodModelVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isPinned => $composableBuilder(
     column: $table.isPinned,
     builder: (column) => ColumnOrderings(column),
@@ -3346,6 +3472,16 @@ class $$NotesTableAnnotationComposer
 
   GeneratedColumn<bool> get moodIsAutomatic => $composableBuilder(
     column: $table.moodIsAutomatic,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get moodConfidence => $composableBuilder(
+    column: $table.moodConfidence,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get moodModelVersion => $composableBuilder(
+    column: $table.moodModelVersion,
     builder: (column) => column,
   );
 
@@ -3451,6 +3587,8 @@ class $$NotesTableTableManager
                 Value<String> noteType = const Value.absent(),
                 Value<String> mood = const Value.absent(),
                 Value<bool> moodIsAutomatic = const Value.absent(),
+                Value<double> moodConfidence = const Value.absent(),
+                Value<int> moodModelVersion = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
@@ -3464,6 +3602,8 @@ class $$NotesTableTableManager
                 noteType: noteType,
                 mood: mood,
                 moodIsAutomatic: moodIsAutomatic,
+                moodConfidence: moodConfidence,
+                moodModelVersion: moodModelVersion,
                 isPinned: isPinned,
                 isArchived: isArchived,
                 trashedAt: trashedAt,
@@ -3479,6 +3619,8 @@ class $$NotesTableTableManager
                 Value<String> noteType = const Value.absent(),
                 Value<String> mood = const Value.absent(),
                 Value<bool> moodIsAutomatic = const Value.absent(),
+                Value<double> moodConfidence = const Value.absent(),
+                Value<int> moodModelVersion = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
@@ -3492,6 +3634,8 @@ class $$NotesTableTableManager
                 noteType: noteType,
                 mood: mood,
                 moodIsAutomatic: moodIsAutomatic,
+                moodConfidence: moodConfidence,
+                moodModelVersion: moodModelVersion,
                 isPinned: isPinned,
                 isArchived: isArchived,
                 trashedAt: trashedAt,

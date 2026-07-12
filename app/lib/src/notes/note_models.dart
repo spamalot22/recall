@@ -139,7 +139,12 @@ enum ColorMood {
   routine,
   errand,
   joyful,
-  reflective;
+  warm,
+  calm,
+  reflective,
+  tense,
+  intense,
+  surprised;
 
   MoodColors resolve(ColorScheme scheme) {
     return switch (this) {
@@ -154,7 +159,12 @@ enum ColorMood {
       ColorMood.routine => _seededMood(scheme, const Color(0xFF24745C)),
       ColorMood.errand => _seededMood(scheme, const Color(0xFF9A5D00)),
       ColorMood.joyful => _seededMood(scheme, const Color(0xFFB56B00)),
+      ColorMood.warm => _seededMood(scheme, const Color(0xFFA53F68)),
+      ColorMood.calm => _seededMood(scheme, const Color(0xFF007C91)),
       ColorMood.reflective => _seededMood(scheme, const Color(0xFF32658F)),
+      ColorMood.tense => _seededMood(scheme, const Color(0xFF74558D)),
+      ColorMood.intense => _seededMood(scheme, const Color(0xFFC33D18)),
+      ColorMood.surprised => _seededMood(scheme, const Color(0xFF008577)),
     };
   }
 
@@ -338,26 +348,6 @@ final _moodRules = [
     r'\b(?:meeting notes?|agenda|reference|idea|review|learn|course|report|proposal|strategy|goals?)\b',
     2,
   ),
-  _MoodRule(
-    ColorMood.joyful,
-    r'\b(?:happy|happiness|joy|joyful|excited|exciting|delighted|cheerful|celebrat(?:e|ing|ion)|fantastic|wonderful|amazing)\b',
-    3.2,
-  ),
-  _MoodRule(
-    ColorMood.joyful,
-    r'\b(?:grateful|thankful|proud|love|lovely|fun|smile|good news|great news|birthday|anniversary|holiday)\b',
-    2.7,
-  ),
-  _MoodRule(
-    ColorMood.reflective,
-    r'\b(?:sad|sadness|upset|unhappy|lonely|grief|grieving|heartbroken|crying|miserable|depressed)\b',
-    3.2,
-  ),
-  _MoodRule(
-    ColorMood.reflective,
-    r'\b(?:worried|anxious|difficult|rough day|hard day|disappointed|regret|miss|missing|tired|exhausted|overwhelmed)\b',
-    2.4,
-  ),
 ];
 
 final _urgencyNegations = [
@@ -376,8 +366,6 @@ const _moodTieBreak = [
   ColorMood.errand,
   ColorMood.routine,
   ColorMood.focus,
-  ColorMood.joyful,
-  ColorMood.reflective,
 ];
 
 const sampleNotes = [

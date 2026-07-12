@@ -92,9 +92,24 @@ void main() {
     );
     expect(bodyField.focusNode?.hasFocus, isTrue);
 
-    await tester.tap(find.byTooltip('Add reminder'));
+    addTearDown(tester.view.resetViewInsets);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 240);
+    await tester.pumpAndSettle();
+    final scaffold = find.byType(Scaffold);
+    final scaffoldHeight = tester.getSize(scaffold).height;
+    final keyboardInset = MediaQuery.viewInsetsOf(
+      tester.element(scaffold),
+    ).bottom;
+    final reminderButton = find.byTooltip('Add reminder');
+    expect(
+      tester.getRect(reminderButton).bottom,
+      lessThanOrEqualTo(scaffoldHeight - keyboardInset),
+    );
+
+    await tester.tap(reminderButton);
     await tester.pumpAndSettle();
 
+    expect(bodyField.focusNode?.hasFocus, isFalse);
     expect(find.text('In one hour'), findsOneWidget);
     expect(find.text('Tomorrow'), findsOneWidget);
     expect(find.text('Next Monday'), findsOneWidget);

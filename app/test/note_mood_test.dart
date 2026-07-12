@@ -75,23 +75,10 @@ void main() {
       );
     });
 
-    test('recognises positive emotional language', () {
+    test('leaves emotional language for the learned analyser', () {
       expect(
-        automaticMoodForNote(
-          title: 'Happy news',
-          body: 'I am excited and grateful today',
-        ),
-        ColorMood.joyful,
-      );
-    });
-
-    test('recognises difficult emotional language', () {
-      expect(
-        automaticMoodForNote(
-          title: 'Feeling sad',
-          body: 'A difficult and disappointing day',
-        ),
-        ColorMood.reflective,
+        automaticMoodForNote(title: 'Happy news', body: 'A good day'),
+        ColorMood.clear,
       );
     });
   });
