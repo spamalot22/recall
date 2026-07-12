@@ -303,6 +303,40 @@ void main() {
     expect(find.text('Recall is up to date.'), findsOneWidget);
   });
 
+  testWidgets('startup automatically offers an available update', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          updateServiceProvider.overrideWithValue(_AvailableUpdateService()),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundSyncControllerProvider.overrideWithValue(
+            BackgroundSyncController(
+              settingsStore: BackgroundSyncSettingsStore(
+                storage: _MemoryBackgroundSyncStorage(),
+              ),
+              scheduler: _NoopBackgroundWorkScheduler(),
+            ),
+          ),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Update available'), findsOneWidget);
+    expect(find.textContaining('Recall 0.1.8 is available'), findsOneWidget);
+    expect(find.text('Install'), findsOneWidget);
+  });
+
   testWidgets('settings opens encrypted backup account setup', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -390,6 +424,27 @@ class _NoUpdateService extends UpdateService {
       apkDownloadUrl: Uri.parse('https://example.com/recall.apk'),
       releaseUrl: Uri.parse('https://example.com/releases/1.0.0'),
       updateAvailable: false,
+    );
+  }
+}
+
+class _AvailableUpdateService extends UpdateService {
+  @override
+  Future<UpdateCheckResult> checkForUpdate({
+    String currentVersion = appVersion,
+  }) async {
+    return UpdateCheckResult(
+      currentVersion: const SemanticVersion(0, 1, 7),
+      latestVersion: const SemanticVersion(0, 1, 8),
+      apkName: 'recall-android-0.1.8.apk',
+      apkDownloadUrl: Uri.parse(
+        'https://github.com/spamalot22/recall/releases/download/0.1.8/recall-android-0.1.8.apk',
+      ),
+      releaseUrl: Uri.parse(
+        'https://github.com/spamalot22/recall/releases/tag/0.1.8',
+      ),
+      downloadSizeBytes: 63634094,
+      updateAvailable: true,
     );
   }
 }
