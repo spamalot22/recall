@@ -74,24 +74,35 @@ void main() {
         ColorMood.urgent,
       );
     });
+
+    test('recognises positive emotional language', () {
+      expect(
+        automaticMoodForNote(
+          title: 'Happy news',
+          body: 'I am excited and grateful today',
+        ),
+        ColorMood.joyful,
+      );
+    });
+
+    test('recognises difficult emotional language', () {
+      expect(
+        automaticMoodForNote(
+          title: 'Feeling sad',
+          body: 'A difficult and disappointing day',
+        ),
+        ColorMood.reflective,
+      );
+    });
   });
 
-  test('moods use accessible Material color scheme role pairs', () {
+  test('moods have visibly distinct Material palettes', () {
     final scheme = ColorScheme.fromSeed(seedColor: Colors.green);
+    final backgrounds = ColorMood.values
+        .map((mood) => mood.resolve(scheme).background.toARGB32())
+        .toSet();
 
-    expect(ColorMood.focus.resolve(scheme).background, scheme.primaryContainer);
-    expect(
-      ColorMood.focus.resolve(scheme).foreground,
-      scheme.onPrimaryContainer,
-    );
-    expect(
-      ColorMood.errand.resolve(scheme).background,
-      scheme.secondaryContainer,
-    );
-    expect(
-      ColorMood.routine.resolve(scheme).background,
-      scheme.tertiaryContainer,
-    );
-    expect(ColorMood.urgent.resolve(scheme).background, scheme.errorContainer);
+    expect(backgrounds, hasLength(ColorMood.values.length));
+    expect(ColorMood.clear.resolve(scheme).background, isNot(scheme.surface));
   });
 }

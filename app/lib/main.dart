@@ -490,6 +490,10 @@ class NoteCard extends ConsumerWidget {
 
     return Card(
       color: colors.background,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: colors.outline),
+      ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _openNoteEditor(context, noteId: note.id),

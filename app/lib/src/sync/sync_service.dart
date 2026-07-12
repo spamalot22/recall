@@ -497,6 +497,8 @@ class SyncService {
           'urgent',
           'routine',
           'errand',
+          'joyful',
+          'reflective',
         }.contains(mood)) {
       throw const SyncException('Encrypted note record is invalid.');
     }

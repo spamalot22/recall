@@ -123,11 +123,13 @@ class MoodColors {
     required this.background,
     required this.foreground,
     required this.accent,
+    required this.outline,
   });
 
   final Color background;
   final Color foreground;
   final Color accent;
+  final Color outline;
 }
 
 enum ColorMood {
@@ -135,35 +137,24 @@ enum ColorMood {
   focus,
   urgent,
   routine,
-  errand;
+  errand,
+  joyful,
+  reflective;
 
   MoodColors resolve(ColorScheme scheme) {
     return switch (this) {
       ColorMood.clear => MoodColors(
-        background: scheme.surfaceContainerLow,
+        background: scheme.surfaceContainerHigh,
         foreground: scheme.onSurface,
         accent: scheme.primary,
+        outline: scheme.outlineVariant,
       ),
-      ColorMood.focus => MoodColors(
-        background: scheme.primaryContainer,
-        foreground: scheme.onPrimaryContainer,
-        accent: scheme.primary,
-      ),
-      ColorMood.urgent => MoodColors(
-        background: scheme.errorContainer,
-        foreground: scheme.onErrorContainer,
-        accent: scheme.error,
-      ),
-      ColorMood.routine => MoodColors(
-        background: scheme.tertiaryContainer,
-        foreground: scheme.onTertiaryContainer,
-        accent: scheme.tertiary,
-      ),
-      ColorMood.errand => MoodColors(
-        background: scheme.secondaryContainer,
-        foreground: scheme.onSecondaryContainer,
-        accent: scheme.secondary,
-      ),
+      ColorMood.focus => _seededMood(scheme, const Color(0xFF4055B5)),
+      ColorMood.urgent => _seededMood(scheme, const Color(0xFFBA1A1A)),
+      ColorMood.routine => _seededMood(scheme, const Color(0xFF24745C)),
+      ColorMood.errand => _seededMood(scheme, const Color(0xFF9A5D00)),
+      ColorMood.joyful => _seededMood(scheme, const Color(0xFFB56B00)),
+      ColorMood.reflective => _seededMood(scheme, const Color(0xFF32658F)),
     };
   }
 
@@ -173,6 +164,20 @@ enum ColorMood {
       orElse: () => ColorMood.clear,
     );
   }
+}
+
+MoodColors _seededMood(ColorScheme appScheme, Color seed) {
+  final palette = ColorScheme.fromSeed(
+    seedColor: seed,
+    brightness: appScheme.brightness,
+    contrastLevel: 0.15,
+  );
+  return MoodColors(
+    background: palette.primaryContainer,
+    foreground: palette.onPrimaryContainer,
+    accent: palette.primary,
+    outline: palette.primary.withValues(alpha: 0.38),
+  );
 }
 
 ColorMood automaticMoodForNote({
@@ -333,6 +338,26 @@ final _moodRules = [
     r'\b(?:meeting notes?|agenda|reference|idea|review|learn|course|report|proposal|strategy|goals?)\b',
     2,
   ),
+  _MoodRule(
+    ColorMood.joyful,
+    r'\b(?:happy|happiness|joy|joyful|excited|exciting|delighted|cheerful|celebrat(?:e|ing|ion)|fantastic|wonderful|amazing)\b',
+    3.2,
+  ),
+  _MoodRule(
+    ColorMood.joyful,
+    r'\b(?:grateful|thankful|proud|love|lovely|fun|smile|good news|great news|birthday|anniversary|holiday)\b',
+    2.7,
+  ),
+  _MoodRule(
+    ColorMood.reflective,
+    r'\b(?:sad|sadness|upset|unhappy|lonely|grief|grieving|heartbroken|crying|miserable|depressed)\b',
+    3.2,
+  ),
+  _MoodRule(
+    ColorMood.reflective,
+    r'\b(?:worried|anxious|difficult|rough day|hard day|disappointed|regret|miss|missing|tired|exhausted|overwhelmed)\b',
+    2.4,
+  ),
 ];
 
 final _urgencyNegations = [
@@ -351,6 +376,8 @@ const _moodTieBreak = [
   ColorMood.errand,
   ColorMood.routine,
   ColorMood.focus,
+  ColorMood.joyful,
+  ColorMood.reflective,
 ];
 
 const sampleNotes = [
