@@ -114,33 +114,16 @@ class ReminderScheduler {
     );
 
     await _notifications.cancel(id: id);
-    try {
-      await _notifications.zonedSchedule(
-        id: id,
-        title: notificationTitle,
-        body: notificationBody,
-        scheduledDate: scheduledDate,
-        notificationDetails: details,
-        androidScheduleMode: scheduleMode,
-        matchDateTimeComponents: matchComponents,
-        payload: noteId,
-      );
-    } on PlatformException {
-      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
-        rethrow;
-      }
-
-      await _notifications.zonedSchedule(
-        id: id,
-        title: notificationTitle,
-        body: notificationBody,
-        scheduledDate: scheduledDate,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        matchDateTimeComponents: matchComponents,
-        payload: noteId,
-      );
-    }
+    await _zonedScheduleWithFallback(
+      id: id,
+      title: notificationTitle,
+      body: notificationBody,
+      scheduledDate: scheduledDate,
+      notificationDetails: details,
+      scheduleMode: scheduleMode,
+      matchDateTimeComponents: matchComponents,
+      payload: noteId,
+    );
   }
 
   Future<void> cancelNoteReminder(String noteId) async {
@@ -166,13 +149,13 @@ class ReminderScheduler {
       return;
     }
 
-    await _notifications.zonedSchedule(
+    await _zonedScheduleWithFallback(
       id: id,
       title: _notificationTitle(schedule.title),
       body: _notificationBody(schedule.body),
       scheduledDate: _toScheduledDate(snoozeUntil),
       notificationDetails: _notificationDetails(schedule.body),
-      androidScheduleMode: await _androidScheduleMode(
+      scheduleMode: await _androidScheduleMode(
         requestPermissions: requestPermissions,
       ),
       payload: schedule.noteId,
@@ -304,23 +287,49 @@ class ReminderScheduler {
       return AndroidScheduleMode.inexactAllowWhileIdle;
     }
 
-    if (requestPermissions) {
-      await android.requestNotificationsPermission();
-    }
+    return resolveAndroidReminderScheduleMode(
+      requestPermissions: requestPermissions,
+      requestNotificationsPermission: android.requestNotificationsPermission,
+      canScheduleExactNotifications: android.canScheduleExactNotifications,
+    );
+  }
 
-    final canScheduleExact = await android.canScheduleExactNotifications();
-    if (canScheduleExact == true) {
-      return AndroidScheduleMode.exactAllowWhileIdle;
+  Future<void> _zonedScheduleWithFallback({
+    required int id,
+    required String title,
+    required String body,
+    required tz.TZDateTime scheduledDate,
+    required NotificationDetails notificationDetails,
+    required AndroidScheduleMode scheduleMode,
+    DateTimeComponents? matchDateTimeComponents,
+    required String payload,
+  }) async {
+    try {
+      await _notifications.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: notificationDetails,
+        androidScheduleMode: scheduleMode,
+        matchDateTimeComponents: matchDateTimeComponents,
+        payload: payload,
+      );
+    } on PlatformException {
+      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
+        rethrow;
+      }
+      await _notifications.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: scheduledDate,
+        notificationDetails: notificationDetails,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        matchDateTimeComponents: matchDateTimeComponents,
+        payload: payload,
+      );
     }
-
-    if (!requestPermissions) {
-      return AndroidScheduleMode.inexactAllowWhileIdle;
-    }
-    await android.requestExactAlarmsPermission();
-    final grantedAfterRequest = await android.canScheduleExactNotifications();
-    return grantedAfterRequest == true
-        ? AndroidScheduleMode.exactAllowWhileIdle
-        : AndroidScheduleMode.inexactAllowWhileIdle;
   }
 
   tz.TZDateTime _toScheduledDate(DateTime dateTime) {
@@ -393,5 +402,28 @@ class ReminderScheduler {
       return value;
     }
     return '${String.fromCharCodes(runes.take(maxRunes - 3))}...';
+  }
+}
+
+@visibleForTesting
+Future<AndroidScheduleMode> resolveAndroidReminderScheduleMode({
+  required bool requestPermissions,
+  required Future<bool?> Function() requestNotificationsPermission,
+  required Future<bool?> Function() canScheduleExactNotifications,
+}) async {
+  if (requestPermissions) {
+    try {
+      await requestNotificationsPermission();
+    } on Object {
+      // Notification permission state must not prevent storing the alarm.
+    }
+  }
+
+  try {
+    return await canScheduleExactNotifications() == true
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  } on Object {
+    return AndroidScheduleMode.inexactAllowWhileIdle;
   }
 }
