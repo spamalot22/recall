@@ -224,7 +224,7 @@ class ReminderScheduler {
     await _setLocalTimezone();
 
     const initializationSettings = InitializationSettings(
-      android: AndroidInitializationSettings('@drawable/ic_notification'),
+      android: AndroidInitializationSettings('ic_notification'),
     );
     try {
       await _notifications.initialize(
