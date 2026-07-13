@@ -11,6 +11,7 @@ import 'src/account/secure_account_store.dart';
 import 'src/notes/note_models.dart';
 import 'src/notes/notes_repository.dart';
 import 'src/providers.dart';
+import 'src/reminders/reminder_editor.dart';
 import 'src/reminders/reminder_scheduler.dart';
 import 'src/sync/sync_service.dart';
 import 'src/sync/background_sync.dart';
@@ -2691,7 +2692,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   Future<void> _editReminder() async {
     FocusScope.of(context).unfocus();
-    final selection = await _showReminderEditor(
+    final selection = await showReminderEditor(
       context,
       initialAt: _reminderAt,
       initialRecurrence: _recurrence,
@@ -3039,133 +3040,10 @@ class _ChecklistEditorRow extends StatelessWidget {
   }
 }
 
-class _ReminderSelection {
-  const _ReminderSelection(this.at, this.recurrence);
-
-  final DateTime? at;
-  final ReminderRecurrence recurrence;
-}
-
 class _MoodSelection {
   const _MoodSelection(this.mood);
 
   final ColorMood? mood;
-}
-
-Future<_ReminderSelection?> _showReminderEditor(
-  BuildContext context, {
-  required DateTime? initialAt,
-  required ReminderRecurrence initialRecurrence,
-}) {
-  final laterToday = _laterToday();
-  var selectedAt = initialAt ?? laterToday;
-  var recurrence = initialRecurrence;
-  final tomorrow = _tomorrowMorning();
-  final nextMonday = _nextMondayMorning();
-
-  return showModalBottomSheet<_ReminderSelection>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) => StatefulBuilder(
-      builder: (sheetContext, setSheetState) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                initialAt == null ? 'Add reminder' : 'Edit reminder',
-                style: Theme.of(sheetContext).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ChoiceChip(
-                    avatar: const Icon(Icons.schedule_rounded, size: 18),
-                    label: const Text('In one hour'),
-                    selected: _sameMinute(selectedAt, laterToday),
-                    onSelected: (_) =>
-                        setSheetState(() => selectedAt = laterToday),
-                  ),
-                  ChoiceChip(
-                    avatar: const Icon(Icons.wb_sunny_outlined, size: 18),
-                    label: const Text('Tomorrow'),
-                    selected: _sameMinute(selectedAt, tomorrow),
-                    onSelected: (_) =>
-                        setSheetState(() => selectedAt = tomorrow),
-                  ),
-                  ChoiceChip(
-                    avatar: const Icon(Icons.date_range_outlined, size: 18),
-                    label: const Text('Next Monday'),
-                    selected: _sameMinute(selectedAt, nextMonday),
-                    onSelected: (_) =>
-                        setSheetState(() => selectedAt = nextMonday),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.event_outlined),
-                title: Text(_formatEditorDateTime(sheetContext, selectedAt)),
-                trailing: const Icon(Icons.edit_calendar_outlined),
-                onTap: () async {
-                  final custom = await _pickReminderDateTime(
-                    sheetContext,
-                    selectedAt,
-                  );
-                  if (custom != null && sheetContext.mounted) {
-                    setSheetState(() => selectedAt = custom);
-                  }
-                },
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<ReminderRecurrence>(
-                initialValue: recurrence,
-                decoration: const InputDecoration(
-                  labelText: 'Repeat',
-                  prefixIcon: Icon(Icons.event_repeat_rounded),
-                ),
-                items: [
-                  for (final value in ReminderRecurrence.values)
-                    DropdownMenuItem(value: value, child: Text(value.label)),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    setSheetState(() => recurrence = value);
-                  }
-                },
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  if (initialAt != null)
-                    TextButton.icon(
-                      onPressed: () => Navigator.of(sheetContext).pop(
-                        const _ReminderSelection(null, ReminderRecurrence.none),
-                      ),
-                      icon: const Icon(Icons.delete_outline_rounded),
-                      label: const Text('Remove'),
-                    ),
-                  const Spacer(),
-                  FilledButton(
-                    onPressed: () => Navigator.of(
-                      sheetContext,
-                    ).pop(_ReminderSelection(selectedAt, recurrence)),
-                    child: const Text('Done'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
 }
 
 Future<_MoodSelection?> _showMoodPicker(
@@ -3224,58 +3102,6 @@ Future<_MoodSelection?> _showMoodPicker(
       ),
     ),
   );
-}
-
-Future<DateTime?> _pickReminderDateTime(
-  BuildContext context,
-  DateTime initial,
-) async {
-  final now = DateTime.now();
-  final date = await showDatePicker(
-    context: context,
-    initialDate: initial.isBefore(now) ? now : initial,
-    firstDate: DateTime(now.year, now.month, now.day),
-    lastDate: now.add(const Duration(days: 3650)),
-  );
-  if (date == null || !context.mounted) {
-    return null;
-  }
-  final time = await showTimePicker(
-    context: context,
-    initialTime: TimeOfDay.fromDateTime(initial),
-  );
-  if (time == null) {
-    return null;
-  }
-  return DateTime(date.year, date.month, date.day, time.hour, time.minute);
-}
-
-DateTime _laterToday() {
-  final now = DateTime.now();
-  final nextHour = DateTime(now.year, now.month, now.day, now.hour + 1);
-  return nextHour;
-}
-
-bool _sameMinute(DateTime first, DateTime second) =>
-    first.year == second.year &&
-    first.month == second.month &&
-    first.day == second.day &&
-    first.hour == second.hour &&
-    first.minute == second.minute;
-
-DateTime _tomorrowMorning() {
-  final tomorrow = DateTime.now().add(const Duration(days: 1));
-  return DateTime(tomorrow.year, tomorrow.month, tomorrow.day, 9);
-}
-
-DateTime _nextMondayMorning() {
-  final now = DateTime.now();
-  var days = DateTime.monday - now.weekday;
-  if (days <= 0) {
-    days += 7;
-  }
-  final monday = now.add(Duration(days: days));
-  return DateTime(monday.year, monday.month, monday.day, 9);
 }
 
 String _formatEditorDateTime(BuildContext context, DateTime dateTime) {

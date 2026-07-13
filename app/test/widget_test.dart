@@ -110,10 +110,163 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(bodyField.focusNode?.hasFocus, isFalse);
-    expect(find.text('In one hour'), findsOneWidget);
+    expect(find.text('Date'), findsOneWidget);
+    expect(find.text('Time'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
     expect(find.text('Tomorrow'), findsOneWidget);
-    expect(find.text('Next Monday'), findsOneWidget);
+    expect(find.text('Choose date'), findsOneWidget);
+    expect(find.text('Choose time'), findsOneWidget);
     expect(find.text('Repeat'), findsOneWidget);
+  });
+
+  testWidgets('date and time pickers open independently', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Add reminder'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Choose date'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DatePickerDialog), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Choose time'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TimePickerDialog), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('separate date and time choices save one reminder timestamp', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(database);
+    final today = DateTime.now();
+    final expectedDate = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).add(const Duration(days: 1));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Remember this tomorrow morning',
+    );
+    await tester.tap(find.byTooltip('Add reminder'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tomorrow'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Morning'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(CloseButton));
+    await tester.pumpAndSettle();
+
+    final notes = await database.select(database.notes).get();
+    expect(notes, hasLength(1));
+    final saved = await repository.loadNoteForEditing(notes.single.id);
+    final reminderAt = saved?.reminder?.nextFireAt;
+    expect(reminderAt, isNotNull);
+    expect(reminderAt?.year, expectedDate.year);
+    expect(reminderAt?.month, expectedDate.month);
+    expect(reminderAt?.day, expectedDate.day);
+    expect(reminderAt?.hour, 9);
+    expect(reminderAt?.minute, 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('editing a reminder preserves and updates separate choices', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(database);
+    final today = DateTime.now();
+    final tomorrow = DateTime(today.year, today.month, today.day + 1, 13);
+    final noteId = await repository.createTextNote(
+      title: 'Existing reminder',
+      body: 'Change this reminder time.',
+      reminder: NoteReminder(
+        nextFireAt: tomorrow,
+        recurrence: ReminderRecurrence.none,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Existing reminder'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Edit reminder'));
+    await tester.pumpAndSettle();
+
+    final tomorrowChip = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, 'Tomorrow'),
+    );
+    final afternoonChip = tester.widget<ChoiceChip>(
+      find.ancestor(
+        of: find.textContaining('Afternoon'),
+        matching: find.byType(ChoiceChip),
+      ),
+    );
+    expect(tomorrowChip.selected, isTrue);
+    expect(afternoonChip.selected, isTrue);
+
+    await tester.tap(find.textContaining('Evening'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(CloseButton));
+    await tester.pumpAndSettle();
+
+    final saved = await repository.loadNoteForEditing(noteId);
+    expect(saved?.reminder?.nextFireAt.hour, 18);
+    expect(saved?.reminder?.nextFireAt.minute, 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
   });
 
   testWidgets('titleless notes lead with their content', (tester) async {
