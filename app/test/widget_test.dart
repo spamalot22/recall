@@ -148,6 +148,45 @@ void main() {
     expect(find.byTooltip('Use grid layout'), findsOneWidget);
   });
 
+  testWidgets('swiping a note archives it with undo feedback', (tester) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(database);
+    final noteId = await repository.createTextNote(
+      title: 'Swipe me',
+      body: 'Archive this note from the home screen.',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final card = find.byType(Dismissible);
+    final cardWidth = tester.getSize(card).width;
+    await tester.drag(card, Offset(-cardWidth * 0.8, 0), touchSlopY: 0);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Note archived.'), findsOneWidget);
+    final archived = await (database.select(
+      database.notes,
+    )..where((note) => note.id.equals(noteId))).getSingle();
+    expect(archived.isArchived, isTrue);
+    expect(find.text('Undo'), findsOneWidget);
+    expect(find.text('Swipe me'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
   testWidgets('back saves a non-empty titleless note', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);

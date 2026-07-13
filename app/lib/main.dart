@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 import 'src/account/auth_service.dart';
 import 'src/account/secure_account_store.dart';
@@ -70,6 +71,27 @@ ThemeData _buildTheme(ColorScheme scheme) {
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ),
+    bottomSheetTheme: BottomSheetThemeData(
+      showDragHandle: true,
+      backgroundColor: scheme.surfaceContainerLow,
+      surfaceTintColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+    ),
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: scheme.inverseSurface,
+      contentTextStyle: TextStyle(color: scheme.onInverseSurface),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      elevation: 2,
+      focusElevation: 3,
+      hoverElevation: 3,
+      highlightElevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -242,8 +264,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 child: ErrorState(message: error.toString()),
               ),
               loading: () => const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
+                child: _LoadingNotes(),
               ),
             ),
           ],
@@ -317,7 +338,13 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     mainAxisSpacing: 12,
                   ),
                   itemCount: notes.length,
-                  itemBuilder: (context, index) => NoteCard(note: notes[index]),
+                  itemBuilder: (context, index) => _NoteEntrance(
+                    key: ValueKey('grid-${notes[index].id}'),
+                    child: _SwipeArchiveNote(
+                      note: notes[index],
+                      child: NoteCard(note: notes[index]),
+                    ),
+                  ),
                 );
               },
             )
@@ -327,7 +354,13 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 padding: const EdgeInsets.only(bottom: 12),
                 child: SizedBox(
                   height: 176,
-                  child: NoteCard(note: notes[index]),
+                  child: _NoteEntrance(
+                    key: ValueKey('list-${notes[index].id}'),
+                    child: _SwipeArchiveNote(
+                      note: notes[index],
+                      child: NoteCard(note: notes[index]),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -429,28 +462,137 @@ class _EmptyState extends StatelessWidget {
         ? 'Capture a thought, a task, or something you want to remember.'
         : 'Notes matching this view will appear here.';
 
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              searching ? Icons.search_off_rounded : Icons.note_add_outlined,
-              size: 48,
-              color: colors.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(text, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurfaceVariant),
-            ),
-          ],
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 12 * (1 - value)),
+          child: child,
         ),
       ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                searching ? Icons.search_off_rounded : Icons.note_add_outlined,
+                size: 48,
+                color: colors.primary,
+              ),
+              const SizedBox(height: 16),
+              Text(text, style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 6),
+              Text(
+                detail,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: colors.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoadingNotes extends StatefulWidget {
+  const _LoadingNotes();
+
+  @override
+  State<_LoadingNotes> createState() => _LoadingNotesState();
+}
+
+class _LoadingNotesState extends State<_LoadingNotes>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _controller
+        ..stop()
+        ..value = 1;
+    } else if (!_controller.isAnimating) {
+      _controller.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final color = Color.lerp(
+          colors.surfaceContainerLow,
+          colors.surfaceContainerHighest,
+          _controller.value,
+        )!;
+        return GridView.builder(
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisExtent: 204,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+          ),
+          itemCount: 4,
+          itemBuilder: (context, index) => DecoratedBox(
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: colors.outlineVariant.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NoteEntrance extends StatelessWidget {
+  const _NoteEntrance({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 8 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 }
@@ -477,134 +619,229 @@ class ErrorState extends StatelessWidget {
 
 enum _NoteCardAction { pin, archive, delete }
 
-class NoteCard extends ConsumerWidget {
+class _SwipeArchiveNote extends ConsumerWidget {
+  const _SwipeArchiveNote({required this.note, required this.child});
+
+  final NotePreview note;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = Theme.of(context).colorScheme;
+    final restoring = note.archived;
+    return Dismissible(
+      key: ValueKey('archive-${note.id}-$restoring'),
+      direction: DismissDirection.endToStart,
+      dismissThresholds: const {DismissDirection.endToStart: 0.24},
+      confirmDismiss: (_) {
+        unawaited(HapticFeedback.mediumImpact());
+        return _setArchivedWithFeedback(
+          context,
+          ref,
+          note,
+          archived: !note.archived,
+        );
+      },
+      secondaryBackground: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.secondaryContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  restoring ? Icons.unarchive_outlined : Icons.archive_outlined,
+                  color: colors.onSecondaryContainer,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  restoring ? 'Restore' : 'Archive',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: colors.onSecondaryContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      background: const SizedBox.shrink(),
+      child: child,
+    );
+  }
+}
+
+class NoteCard extends ConsumerStatefulWidget {
   const NoteCard({super.key, required this.note});
 
   final NotePreview note;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NoteCard> createState() => _NoteCardState();
+}
+
+class _NoteCardState extends ConsumerState<NoteCard> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final note = widget.note;
     final colors = note.mood.resolve(Theme.of(context).colorScheme);
     final hasReminder = note.reminderAt != null;
     final hasTitle = note.title.trim().isNotEmpty;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
-    return Card(
-      color: colors.background,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: colors.outline),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _openNoteEditor(context, noteId: note.id),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (hasTitle)
-                    Expanded(
-                      child: Text(
-                        note.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              color: colors.foreground,
-                              fontWeight: FontWeight.w800,
-                            ),
-                      ),
-                    )
-                  else
-                    const Spacer(),
-                  if (note.pinned)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: Icon(
-                        Icons.push_pin_rounded,
-                        size: 16,
-                        color: colors.accent,
-                      ),
-                    ),
-                  PopupMenuButton<_NoteCardAction>(
-                    tooltip: 'Note actions',
-                    padding: EdgeInsets.zero,
-                    iconSize: 20,
-                    icon: Icon(
-                      Icons.more_vert_rounded,
-                      color: colors.foreground,
-                    ),
-                    onSelected: (action) => _runAction(context, ref, action),
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: _NoteCardAction.pin,
-                        child: _MenuItem(
-                          icon: note.pinned
-                              ? Icons.push_pin_outlined
-                              : Icons.push_pin_rounded,
-                          label: note.pinned ? 'Unpin' : 'Pin',
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _NoteCardAction.archive,
-                        child: _MenuItem(
-                          icon: note.archived
-                              ? Icons.unarchive_outlined
-                              : Icons.archive_outlined,
-                          label: note.archived ? 'Unarchive' : 'Archive',
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: _NoteCardAction.delete,
-                        child: _MenuItem(
-                          icon: Icons.delete_outline_rounded,
-                          label: 'Move to trash',
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              SizedBox(height: hasTitle ? 8 : 2),
-              Expanded(
-                child: note.checklistItems.isEmpty
-                    ? Text(
-                        note.body,
-                        maxLines: hasTitle ? 5 : 7,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: colors.foreground.withValues(alpha: 0.9),
-                          fontSize: hasTitle ? null : 16,
-                          height: 1.35,
-                        ),
-                      )
-                    : ChecklistPreview(
-                        noteId: note.id,
-                        items: note.checklistItems,
-                        foreground: colors.foreground,
-                        accent: colors.accent,
-                      ),
-              ),
-              if (hasReminder || note.checklistItems.isNotEmpty) ...[
-                const SizedBox(height: 8),
+    return AnimatedScale(
+      scale: _pressed ? 0.985 : 1,
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 110),
+      curve: Curves.easeOutCubic,
+      child: Card(
+        color: colors.background,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: colors.outline),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onHighlightChanged: (pressed) {
+            if (_pressed != pressed) {
+              setState(() => _pressed = pressed);
+            }
+          },
+          onTap: () {
+            unawaited(HapticFeedback.selectionClick());
+            unawaited(_openNoteEditor(context, noteId: note.id));
+          },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Row(
                   children: [
-                    if (hasReminder) ...[
-                      Icon(
-                        note.recurring
-                            ? Icons.event_repeat_rounded
-                            : Icons.notifications_none_rounded,
-                        size: 16,
-                        color: colors.accent,
-                      ),
-                      const SizedBox(width: 6),
+                    if (hasTitle)
                       Expanded(
                         child: Text(
-                          note.reminderLabel,
+                          note.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: colors.foreground,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    if (note.pinned)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Icon(
+                          Icons.push_pin_rounded,
+                          size: 16,
+                          color: colors.accent,
+                        ),
+                      ),
+                    PopupMenuButton<_NoteCardAction>(
+                      tooltip: 'Note actions',
+                      padding: EdgeInsets.zero,
+                      iconSize: 20,
+                      icon: Icon(
+                        Icons.more_vert_rounded,
+                        color: colors.foreground,
+                      ),
+                      onSelected: (action) => _runAction(context, ref, action),
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: _NoteCardAction.pin,
+                          child: _MenuItem(
+                            icon: note.pinned
+                                ? Icons.push_pin_outlined
+                                : Icons.push_pin_rounded,
+                            label: note.pinned ? 'Unpin' : 'Pin',
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: _NoteCardAction.archive,
+                          child: _MenuItem(
+                            icon: note.archived
+                                ? Icons.unarchive_outlined
+                                : Icons.archive_outlined,
+                            label: note.archived ? 'Unarchive' : 'Archive',
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: _NoteCardAction.delete,
+                          child: _MenuItem(
+                            icon: Icons.delete_outline_rounded,
+                            label: 'Move to trash',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                SizedBox(height: hasTitle ? 8 : 2),
+                Expanded(
+                  child: note.checklistItems.isEmpty
+                      ? Text(
+                          note.body,
+                          maxLines: hasTitle ? 5 : 7,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: colors.foreground.withValues(alpha: 0.9),
+                                fontSize: hasTitle ? null : 16,
+                                height: 1.35,
+                              ),
+                        )
+                      : ChecklistPreview(
+                          noteId: note.id,
+                          items: note.checklistItems,
+                          foreground: colors.foreground,
+                          accent: colors.accent,
+                        ),
+                ),
+                if (hasReminder || note.checklistItems.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      if (hasReminder) ...[
+                        Icon(
+                          note.recurring
+                              ? Icons.event_repeat_rounded
+                              : Icons.notifications_none_rounded,
+                          size: 16,
+                          color: colors.accent,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            note.reminderLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(
+                                  color: colors.foreground.withValues(
+                                    alpha: 0.72,
+                                  ),
+                                ),
+                          ),
+                        ),
+                      ] else
+                        const Spacer(),
+                      if (note.checklistItems.isNotEmpty)
+                        Text(
+                          '${note.completedChecklistItems}/${note.checklistItems.length}',
                           style: Theme.of(context).textTheme.labelMedium
                               ?.copyWith(
                                 color: colors.foreground.withValues(
@@ -612,21 +849,11 @@ class NoteCard extends ConsumerWidget {
                                 ),
                               ),
                         ),
-                      ),
-                    ] else
-                      const Spacer(),
-                    if (note.checklistItems.isNotEmpty)
-                      Text(
-                        '${note.completedChecklistItems}/${note.checklistItems.length}',
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: colors.foreground.withValues(alpha: 0.72),
-                            ),
-                      ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -638,10 +865,12 @@ class NoteCard extends ConsumerWidget {
     WidgetRef ref,
     _NoteCardAction action,
   ) async {
+    final note = widget.note;
     final repository = ref.read(notesRepositoryProvider);
     switch (action) {
       case _NoteCardAction.pin:
         await repository.setPinned(note.id, !note.pinned);
+        unawaited(HapticFeedback.selectionClick());
         unawaited(_syncQuietly(ref));
         if (context.mounted) {
           _showSnackBar(
@@ -650,26 +879,49 @@ class NoteCard extends ConsumerWidget {
           );
         }
       case _NoteCardAction.archive:
-        final archived = !note.archived;
-        await repository.setArchived(note.id, archived);
-        unawaited(_syncQuietly(ref));
-        if (context.mounted) {
-          _showSnackBar(
-            context,
-            archived ? 'Note archived.' : 'Note restored.',
-            actionLabel: 'Undo',
-            onAction: () {
-              unawaited(
-                repository.setArchived(note.id, note.archived).then((_) {
-                  return _syncQuietly(ref);
-                }),
-              );
-            },
-          );
-        }
+        unawaited(HapticFeedback.mediumImpact());
+        await _setArchivedWithFeedback(
+          context,
+          ref,
+          note,
+          archived: !note.archived,
+        );
       case _NoteCardAction.delete:
         await _confirmMoveNoteToTrash(context, ref, note);
     }
+  }
+}
+
+Future<bool> _setArchivedWithFeedback(
+  BuildContext context,
+  WidgetRef ref,
+  NotePreview note, {
+  required bool archived,
+}) async {
+  final repository = ref.read(notesRepositoryProvider);
+  try {
+    await repository.setArchived(note.id, archived);
+    unawaited(_syncQuietly(ref));
+    if (context.mounted) {
+      _showSnackBar(
+        context,
+        archived ? 'Note archived.' : 'Note restored.',
+        actionLabel: 'Undo',
+        onAction: () {
+          unawaited(
+            repository.setArchived(note.id, note.archived).then((_) {
+              return _syncQuietly(ref);
+            }),
+          );
+        },
+      );
+    }
+    return true;
+  } on Object {
+    if (context.mounted) {
+      _showSnackBar(context, 'Could not update this note.');
+    }
+    return false;
   }
 }
 
@@ -704,6 +956,9 @@ class ChecklistPreview extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final visibleItems = items.take(3).toList();
+    final animationDuration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -713,6 +968,7 @@ class ChecklistPreview extends ConsumerWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(4),
               onTap: () async {
+                unawaited(HapticFeedback.selectionClick());
                 await ref
                     .read(notesRepositoryProvider)
                     .toggleChecklistItem(noteId, index);
@@ -720,14 +976,22 @@ class ChecklistPreview extends ConsumerWidget {
               },
               child: Row(
                 children: [
-                  Icon(
-                    visibleItems[index].done
-                        ? Icons.check_circle_rounded
-                        : Icons.radio_button_unchecked_rounded,
-                    size: 17,
-                    color: visibleItems[index].done
-                        ? accent
-                        : foreground.withValues(alpha: 0.66),
+                  AnimatedSwitcher(
+                    duration: animationDuration,
+                    transitionBuilder: (child, animation) => ScaleTransition(
+                      scale: animation,
+                      child: FadeTransition(opacity: animation, child: child),
+                    ),
+                    child: Icon(
+                      visibleItems[index].done
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      key: ValueKey(visibleItems[index].done),
+                      size: 17,
+                      color: visibleItems[index].done
+                          ? accent
+                          : foreground.withValues(alpha: 0.66),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -2014,6 +2278,13 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     final mood = _mood;
     final moodColors = mood.resolve(Theme.of(context).colorScheme);
     final unavailable = _saving || _loading || _missing;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final quickMotion = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
+    final contentMotion = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 240);
 
     return PopScope<void>(
       canPop: !_dirty || _saving,
@@ -2034,9 +2305,18 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
               tooltip: _pinned ? 'Unpin note' : 'Pin note',
               onPressed: unavailable
                   ? null
-                  : () => _updateDraft(() => _pinned = !_pinned),
-              icon: Icon(
-                _pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+                  : () {
+                      unawaited(HapticFeedback.selectionClick());
+                      _updateDraft(() => _pinned = !_pinned);
+                    },
+              icon: AnimatedSwitcher(
+                duration: quickMotion,
+                transitionBuilder: (child, animation) =>
+                    ScaleTransition(scale: animation, child: child),
+                child: Icon(
+                  _pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+                  key: ValueKey(_pinned),
+                ),
               ),
             ),
             PopupMenuButton<_EditorAction>(
@@ -2072,12 +2352,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
             TextButton(
               style: TextButton.styleFrom(foregroundColor: moodColors.accent),
               onPressed: unavailable ? null : _save,
-              child: _saving
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Done'),
+              child: AnimatedSwitcher(
+                duration: quickMotion,
+                child: _saving
+                    ? const SizedBox.square(
+                        key: ValueKey('saving'),
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Done', key: ValueKey('done')),
+              ),
             ),
           ],
         ),
@@ -2088,7 +2372,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
               : _missing
               ? const Center(child: Text('This note is no longer available.'))
               : AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
+                  duration: quickMotion,
                   color: moodColors.background,
                   child: ListView(
                     keyboardDismissBehavior:
@@ -2148,63 +2432,92 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                           contentPadding: EdgeInsets.zero,
                         ),
                       ),
-                      if (_reminderAt != null) ...[
-                        const SizedBox(height: 16),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: InputChip(
-                            avatar: Icon(
-                              _recurrence == ReminderRecurrence.none
-                                  ? Icons.notifications_none_rounded
-                                  : Icons.event_repeat_rounded,
-                              size: 18,
-                            ),
-                            label: Text(
-                              _formatEditorDateTime(context, _reminderAt!),
-                            ),
-                            onPressed: _editReminder,
-                            onDeleted: () => _updateDraft(() {
-                              _reminderAt = null;
-                              _recurrence = ReminderRecurrence.none;
-                            }),
-                            deleteIcon: const Icon(
-                              Icons.close_rounded,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (_isChecklist) ...[
-                        const SizedBox(height: 20),
-                        Divider(
-                          color: moodColors.foreground.withValues(alpha: 0.16),
-                        ),
-                        const SizedBox(height: 4),
-                        for (
-                          var index = 0;
-                          index < _checklistItems.length;
-                          index++
-                        )
-                          _ChecklistEditorRow(
-                            key: ValueKey(_checklistItems[index]),
-                            item: _checklistItems[index],
-                            foreground: moodColors.foreground,
-                            onChanged: _onChecklistChanged,
-                            onSubmitted: () => _advanceChecklist(index),
-                            onRemove: () => _removeChecklistItem(index),
-                          ),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            style: TextButton.styleFrom(
-                              foregroundColor: moodColors.accent,
-                            ),
-                            onPressed: _addChecklistItem,
-                            icon: const Icon(Icons.add_rounded),
-                            label: const Text('Add item'),
-                          ),
-                        ),
-                      ],
+                      AnimatedSize(
+                        duration: contentMotion,
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topLeft,
+                        child: _reminderAt == null
+                            ? const SizedBox(width: double.infinity)
+                            : Padding(
+                                padding: const EdgeInsets.only(top: 16),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: InputChip(
+                                    avatar: Icon(
+                                      _recurrence == ReminderRecurrence.none
+                                          ? Icons.notifications_none_rounded
+                                          : Icons.event_repeat_rounded,
+                                      size: 18,
+                                    ),
+                                    label: Text(
+                                      _formatEditorDateTime(
+                                        context,
+                                        _reminderAt!,
+                                      ),
+                                    ),
+                                    onPressed: _editReminder,
+                                    onDeleted: () {
+                                      unawaited(
+                                        HapticFeedback.selectionClick(),
+                                      );
+                                      _updateDraft(() {
+                                        _reminderAt = null;
+                                        _recurrence = ReminderRecurrence.none;
+                                      });
+                                    },
+                                    deleteIcon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                      ),
+                      AnimatedSize(
+                        duration: contentMotion,
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        child: !_isChecklist
+                            ? const SizedBox(width: double.infinity)
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 20),
+                                  Divider(
+                                    color: moodColors.foreground.withValues(
+                                      alpha: 0.16,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  for (
+                                    var index = 0;
+                                    index < _checklistItems.length;
+                                    index++
+                                  )
+                                    _ChecklistEditorRow(
+                                      key: ValueKey(_checklistItems[index]),
+                                      item: _checklistItems[index],
+                                      foreground: moodColors.foreground,
+                                      onChanged: _onChecklistChanged,
+                                      onSubmitted: () =>
+                                          _advanceChecklist(index),
+                                      onRemove: () =>
+                                          _removeChecklistItem(index),
+                                    ),
+                                  Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: moodColors.accent,
+                                      ),
+                                      onPressed: _addChecklistItem,
+                                      icon: const Icon(Icons.add_rounded),
+                                      label: const Text('Add item'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
                     ],
                   ),
                 ),
@@ -2212,7 +2525,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         bottomNavigationBar: _loading || _missing
             ? null
             : AnimatedPadding(
-                duration: const Duration(milliseconds: 180),
+                duration: quickMotion,
                 curve: Curves.easeOutCubic,
                 padding: EdgeInsets.only(
                   bottom: MediaQuery.viewInsetsOf(context).bottom,
@@ -2233,13 +2546,22 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                                 ? 'Add reminder'
                                 : 'Edit reminder',
                             onPressed: unavailable ? null : _editReminder,
-                            icon: Icon(
-                              _reminderAt == null
-                                  ? Icons.notifications_none_rounded
-                                  : Icons.notifications_active_rounded,
-                              color: _reminderAt == null
-                                  ? null
-                                  : moodColors.accent,
+                            icon: AnimatedSwitcher(
+                              duration: quickMotion,
+                              transitionBuilder: (child, animation) =>
+                                  ScaleTransition(
+                                    scale: animation,
+                                    child: child,
+                                  ),
+                              child: Icon(
+                                _reminderAt == null
+                                    ? Icons.notifications_none_rounded
+                                    : Icons.notifications_active_rounded,
+                                key: ValueKey(_reminderAt != null),
+                                color: _reminderAt == null
+                                    ? null
+                                    : moodColors.accent,
+                              ),
                             ),
                           ),
                           IconButton(
@@ -2252,9 +2574,15 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                                     FocusScope.of(context).unfocus();
                                     _toggleChecklist(requestFocus: false);
                                   },
-                            icon: Icon(
-                              Icons.checklist_rounded,
-                              color: _isChecklist ? moodColors.accent : null,
+                            icon: AnimatedSwitcher(
+                              duration: quickMotion,
+                              child: Icon(
+                                _isChecklist
+                                    ? Icons.playlist_add_check_circle_rounded
+                                    : Icons.checklist_rounded,
+                                key: ValueKey(_isChecklist),
+                                color: _isChecklist ? moodColors.accent : null,
+                              ),
                             ),
                           ),
                           IconButton(
@@ -2729,7 +3057,8 @@ Future<_ReminderSelection?> _showReminderEditor(
   required DateTime? initialAt,
   required ReminderRecurrence initialRecurrence,
 }) {
-  var selectedAt = initialAt ?? _laterToday();
+  final laterToday = _laterToday();
+  var selectedAt = initialAt ?? laterToday;
   var recurrence = initialRecurrence;
   final tomorrow = _tomorrowMorning();
   final nextMonday = _nextMondayMorning();
@@ -2755,21 +3084,25 @@ Future<_ReminderSelection?> _showReminderEditor(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  ActionChip(
+                  ChoiceChip(
                     avatar: const Icon(Icons.schedule_rounded, size: 18),
                     label: const Text('In one hour'),
-                    onPressed: () =>
-                        setSheetState(() => selectedAt = _laterToday()),
+                    selected: _sameMinute(selectedAt, laterToday),
+                    onSelected: (_) =>
+                        setSheetState(() => selectedAt = laterToday),
                   ),
-                  ActionChip(
+                  ChoiceChip(
                     avatar: const Icon(Icons.wb_sunny_outlined, size: 18),
                     label: const Text('Tomorrow'),
-                    onPressed: () => setSheetState(() => selectedAt = tomorrow),
+                    selected: _sameMinute(selectedAt, tomorrow),
+                    onSelected: (_) =>
+                        setSheetState(() => selectedAt = tomorrow),
                   ),
-                  ActionChip(
+                  ChoiceChip(
                     avatar: const Icon(Icons.date_range_outlined, size: 18),
                     label: const Text('Next Monday'),
-                    onPressed: () =>
+                    selected: _sameMinute(selectedAt, nextMonday),
+                    onSelected: (_) =>
                         setSheetState(() => selectedAt = nextMonday),
                   ),
                 ],
@@ -2922,6 +3255,13 @@ DateTime _laterToday() {
   final nextHour = DateTime(now.year, now.month, now.day, now.hour + 1);
   return nextHour;
 }
+
+bool _sameMinute(DateTime first, DateTime second) =>
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day &&
+    first.hour == second.hour &&
+    first.minute == second.minute;
 
 DateTime _tomorrowMorning() {
   final tomorrow = DateTime.now().add(const Duration(days: 1));
