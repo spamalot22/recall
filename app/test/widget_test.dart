@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_color/samples.dart';
 import 'package:dynamic_color/test_utils.dart';
@@ -16,6 +17,7 @@ import 'package:recall_app/src/providers.dart';
 import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 import 'package:recall_app/src/sync/sync_service.dart';
 import 'package:recall_app/src/sync/background_sync.dart';
+import 'package:recall_app/src/updates/apk_installer.dart';
 import 'package:recall_app/src/updates/update_service.dart';
 
 void main() {
@@ -514,6 +516,7 @@ void main() {
     tester,
   ) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    final updateService = _AvailableUpdateService();
     addTearDown(database.close);
     await tester.pumpWidget(
       ProviderScope(
@@ -522,7 +525,7 @@ void main() {
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
-          updateServiceProvider.overrideWithValue(_AvailableUpdateService()),
+          updateServiceProvider.overrideWithValue(updateService),
           storedSessionProvider.overrideWith((ref) async => null),
           backgroundSyncControllerProvider.overrideWithValue(
             BackgroundSyncController(
@@ -542,6 +545,102 @@ void main() {
     expect(find.text('Update available'), findsOneWidget);
     expect(find.textContaining('Recall 0.1.8 is available'), findsOneWidget);
     expect(find.text('Install'), findsOneWidget);
+    expect(updateService.cleanupCalled, isTrue);
+  });
+
+  testWidgets('update download can be cancelled without opening installer', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    final updateService = _CancellableUpdateService();
+    final installer = _RecordingApkInstaller();
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          updateServiceProvider.overrideWithValue(updateService),
+          apkInstallerProvider.overrideWithValue(installer),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundSyncControllerProvider.overrideWithValue(
+            BackgroundSyncController(
+              settingsStore: BackgroundSyncSettingsStore(
+                storage: _MemoryBackgroundSyncStorage(),
+              ),
+              scheduler: _NoopBackgroundWorkScheduler(),
+            ),
+          ),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Install'));
+    await tester.pump();
+
+    expect(find.text('Downloading update'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Update download cancelled.'), findsOneWidget);
+    expect(installer.installAttempts, 0);
+  });
+
+  testWidgets('returning from install settings retries the downloaded APK', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    final updateService = _ReadyUpdateService();
+    final installer = _PermissionRetryApkInstaller();
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          updateServiceProvider.overrideWithValue(updateService),
+          apkInstallerProvider.overrideWithValue(installer),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundSyncControllerProvider.overrideWithValue(
+            BackgroundSyncController(
+              settingsStore: BackgroundSyncSettingsStore(
+                storage: _MemoryBackgroundSyncStorage(),
+              ),
+              scheduler: _NoopBackgroundWorkScheduler(),
+            ),
+          ),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Install'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Permission needed'), findsOneWidget);
+    expect(installer.installAttempts, 1);
+    await tester.tap(find.text('Open settings'));
+    await tester.pumpAndSettle();
+    expect(installer.settingsOpenAttempts, 1);
+
+    for (final state in const [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+
+    expect(installer.installAttempts, 2);
   });
 
   testWidgets('settings opens encrypted backup account setup', (tester) async {
@@ -636,6 +735,13 @@ class _NoUpdateService extends UpdateService {
 }
 
 class _AvailableUpdateService extends UpdateService {
+  bool cleanupCalled = false;
+
+  @override
+  Future<void> cleanupStaleDownloads() async {
+    cleanupCalled = true;
+  }
+
   @override
   Future<UpdateCheckResult> checkForUpdate({
     String currentVersion = appVersion,
@@ -653,6 +759,60 @@ class _AvailableUpdateService extends UpdateService {
       downloadSizeBytes: 63634094,
       updateAvailable: true,
     );
+  }
+}
+
+class _ReadyUpdateService extends _AvailableUpdateService {
+  @override
+  Future<File> downloadApk(
+    UpdateCheckResult update, {
+    void Function(int received, int? total)? onProgress,
+    UpdateCancellationToken? cancellationToken,
+  }) async {
+    onProgress?.call(1, 1);
+    return File('/tmp/recall-test-update.apk');
+  }
+}
+
+class _CancellableUpdateService extends _AvailableUpdateService {
+  @override
+  Future<File> downloadApk(
+    UpdateCheckResult update, {
+    void Function(int received, int? total)? onProgress,
+    UpdateCancellationToken? cancellationToken,
+  }) async {
+    final token = cancellationToken;
+    if (token == null) {
+      throw StateError('A cancellation token is required.');
+    }
+    await token.whenCancelled;
+    throw const UpdateCancelledException();
+  }
+}
+
+class _RecordingApkInstaller extends ApkInstaller {
+  int installAttempts = 0;
+
+  @override
+  Future<void> installApk(String path) async {
+    installAttempts += 1;
+  }
+}
+
+class _PermissionRetryApkInstaller extends _RecordingApkInstaller {
+  int settingsOpenAttempts = 0;
+
+  @override
+  Future<void> installApk(String path) async {
+    installAttempts += 1;
+    if (installAttempts == 1) {
+      throw const InstallPermissionRequiredException();
+    }
+  }
+
+  @override
+  Future<void> openInstallPermissionSettings() async {
+    settingsOpenAttempts += 1;
   }
 }
 

@@ -20,7 +20,13 @@ class ApkInstaller {
   }
 
   Future<void> openInstallPermissionSettings() async {
-    await _channel.invokeMethod<void>('openInstallPermissionSettings');
+    try {
+      await _channel.invokeMethod<void>('openInstallPermissionSettings');
+    } on PlatformException catch (error) {
+      throw ApkInstallException(
+        error.message ?? 'Android could not open install permission settings.',
+      );
+    }
   }
 }
 

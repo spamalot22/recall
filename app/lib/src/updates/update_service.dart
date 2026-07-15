@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -10,18 +11,45 @@ const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 class UpdateService {
   UpdateService({
     HttpClient? httpClient,
+    Future<Directory> Function()? temporaryDirectoryProvider,
     this.owner = 'spamalot22',
     this.repository = 'recall',
   }) : _httpClient =
            httpClient ??
-           (HttpClient()..connectionTimeout = const Duration(seconds: 15));
+           (HttpClient()..connectionTimeout = const Duration(seconds: 15)),
+       _temporaryDirectoryProvider =
+           temporaryDirectoryProvider ?? getTemporaryDirectory;
 
   static const _maxMetadataBytes = 1024 * 1024;
   static const _maxApkBytes = 250 * 1024 * 1024;
 
   final HttpClient _httpClient;
+  final Future<Directory> Function() _temporaryDirectoryProvider;
   final String owner;
   final String repository;
+
+  Future<void> cleanupStaleDownloads() async {
+    try {
+      final directory = await _downloadsDirectory();
+      if (!await directory.exists()) {
+        return;
+      }
+
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! File ||
+            !_isUpdateArtifactName(p.basename(entity.path))) {
+          continue;
+        }
+        try {
+          await entity.delete();
+        } on Exception {
+          // Cache cleanup is best effort and must not block app startup.
+        }
+      }
+    } on Exception {
+      // Updates remain usable if Android has already reclaimed the cache.
+    }
+  }
 
   Future<UpdateCheckResult> checkForUpdate({
     String currentVersion = appVersion,
@@ -106,11 +134,13 @@ class UpdateService {
   Future<File> downloadApk(
     UpdateCheckResult update, {
     void Function(int received, int? total)? onProgress,
+    UpdateCancellationToken? cancellationToken,
   }) async {
-    final directory = Directory(
-      p.join((await getTemporaryDirectory()).path, 'downloads'),
-    );
-    if (!directory.existsSync()) {
+    cancellationToken?.throwIfCancelled();
+    await cleanupStaleDownloads();
+    cancellationToken?.throwIfCancelled();
+    final directory = await _downloadsDirectory();
+    if (!await directory.exists()) {
       await directory.create(recursive: true);
     }
 
@@ -134,7 +164,23 @@ class UpdateService {
     }
     final request = await _httpClient.getUrl(update.apkDownloadUrl);
     _setCommonHeaders(request, followRedirects: true);
-    final response = await request.close();
+    void abortRequest() {
+      request.abort(const UpdateCancelledException());
+    }
+
+    cancellationToken?.addListener(abortRequest);
+    late final HttpClientResponse response;
+    try {
+      cancellationToken?.throwIfCancelled();
+      response = await request.close();
+    } on Object {
+      if (cancellationToken?.isCancelled ?? false) {
+        throw const UpdateCancelledException();
+      }
+      rethrow;
+    } finally {
+      cancellationToken?.removeListener(abortRequest);
+    }
     if (response.statusCode != HttpStatus.ok) {
       throw UpdateException(
         'APK download failed with HTTP ${response.statusCode}.',
@@ -154,17 +200,53 @@ class UpdateService {
     }
     var received = 0;
     final sink = partialFile.openWrite();
-    try {
-      await for (final chunk in response) {
-        received += chunk.length;
-        if (received > total || received > _maxApkBytes) {
-          throw const UpdateException(
-            'APK download exceeded its expected size.',
-          );
-        }
-        sink.add(chunk);
-        onProgress?.call(received, total);
+    final downloadFinished = Completer<void>();
+    StreamSubscription<List<int>>? subscription;
+
+    void cancelDownload() {
+      if (!downloadFinished.isCompleted) {
+        downloadFinished.completeError(
+          const UpdateCancelledException(),
+          StackTrace.current,
+        );
       }
+      unawaited(subscription?.cancel());
+    }
+
+    subscription = response.listen(
+      (chunk) {
+        if (downloadFinished.isCompleted) {
+          return;
+        }
+        try {
+          received += chunk.length;
+          if (received > total || received > _maxApkBytes) {
+            throw const UpdateException(
+              'APK download exceeded its expected size.',
+            );
+          }
+          sink.add(chunk);
+          onProgress?.call(received, total);
+        } on Object catch (error, stackTrace) {
+          downloadFinished.completeError(error, stackTrace);
+          unawaited(subscription?.cancel());
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!downloadFinished.isCompleted) {
+          downloadFinished.completeError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        if (!downloadFinished.isCompleted) {
+          downloadFinished.complete();
+        }
+      },
+      cancelOnError: true,
+    );
+    cancellationToken?.addListener(cancelDownload);
+    try {
+      await downloadFinished.future;
       await sink.close();
       if (received != total) {
         throw const UpdateException(
@@ -175,13 +257,50 @@ class UpdateService {
         await file.delete();
       }
       return partialFile.rename(file.path);
-    } on Object {
-      await sink.close();
-      if (partialFile.existsSync()) {
-        await partialFile.delete();
+    } on Object catch (error, stackTrace) {
+      try {
+        await subscription.cancel();
+      } on Object {
+        // Preserve the original download failure.
       }
-      rethrow;
+      try {
+        await sink.close();
+      } on Object {
+        // Preserve the original download failure.
+      }
+      try {
+        if (partialFile.existsSync()) {
+          await partialFile.delete();
+        }
+      } on Object {
+        // The next startup cleanup will retry removal.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      cancellationToken?.removeListener(cancelDownload);
     }
+  }
+
+  Future<Directory> _downloadsDirectory() async {
+    final temporaryDirectory = await _temporaryDirectoryProvider();
+    return Directory(p.join(temporaryDirectory.path, 'downloads'));
+  }
+
+  bool _isUpdateArtifactName(String fileName) {
+    final apkName = fileName.endsWith('.part')
+        ? fileName.substring(0, fileName.length - '.part'.length)
+        : fileName;
+    const prefix = 'recall-android-';
+    const suffix = '.apk';
+    if (!apkName.startsWith(prefix) || !apkName.endsWith(suffix)) {
+      return false;
+    }
+
+    final version = apkName.substring(
+      prefix.length,
+      apkName.length - suffix.length,
+    );
+    return SemanticVersion.tryParse(version) != null;
   }
 
   Future<Map<String, dynamic>> _getJson(Uri uri) async {
@@ -284,6 +403,54 @@ class UpdateCheckResult {
   final Uri releaseUrl;
   final int? downloadSizeBytes;
   final bool updateAvailable;
+}
+
+class UpdateCancellationToken {
+  final Completer<void> _cancelled = Completer<void>();
+  final Set<void Function()> _listeners = {};
+
+  bool get isCancelled => _cancelled.isCompleted;
+  Future<void> get whenCancelled => _cancelled.future;
+
+  void cancel() {
+    if (isCancelled) {
+      return;
+    }
+    _cancelled.complete();
+    for (final listener in List<void Function()>.of(_listeners)) {
+      try {
+        listener();
+      } on Object {
+        // Cancellation must still reach the remaining listeners.
+      }
+    }
+    _listeners.clear();
+  }
+
+  void addListener(void Function() listener) {
+    if (isCancelled) {
+      listener();
+      return;
+    }
+    _listeners.add(listener);
+  }
+
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  void throwIfCancelled() {
+    if (isCancelled) {
+      throw const UpdateCancelledException();
+    }
+  }
+}
+
+class UpdateCancelledException implements Exception {
+  const UpdateCancelledException();
+
+  @override
+  String toString() => 'Update download cancelled.';
 }
 
 class SemanticVersion implements Comparable<SemanticVersion> {

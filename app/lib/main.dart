@@ -211,7 +211,9 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     _startupUpdateCheckStarted = true;
 
     try {
-      final update = await ref.read(updateServiceProvider).checkForUpdate();
+      final updateService = ref.read(updateServiceProvider);
+      await updateService.cleanupStaleDownloads();
+      final update = await updateService.checkForUpdate();
       if (mounted && update.updateAvailable) {
         await _showUpdateAvailableDialog(context, ref, update);
       }
@@ -264,9 +266,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 hasScrollBody: false,
                 child: ErrorState(message: error.toString()),
               ),
-              loading: () => const SliverFillRemaining(
-                child: _LoadingNotes(),
-              ),
+              loading: () => const SliverFillRemaining(child: _LoadingNotes()),
             ),
           ],
         ),
@@ -2006,6 +2006,7 @@ Future<void> _downloadAndInstallUpdate(
   UpdateCheckResult update,
 ) async {
   final progress = ValueNotifier<double?>(null);
+  final cancellationToken = UpdateCancellationToken();
   var dialogOpen = true;
   final dialogFuture = showDialog<void>(
     context: context,
@@ -2027,6 +2028,19 @@ Future<void> _downloadAndInstallUpdate(
           ],
         ),
       ),
+      actions: [
+        TextButton.icon(
+          onPressed: () {
+            cancellationToken.cancel();
+            if (dialogOpen) {
+              dialogOpen = false;
+              Navigator.of(context).pop();
+            }
+          },
+          icon: const Icon(Icons.close_rounded),
+          label: const Text('Cancel'),
+        ),
+      ],
     ),
   ).whenComplete(() => dialogOpen = false);
 
@@ -2040,19 +2054,23 @@ Future<void> _downloadAndInstallUpdate(
                 ? null
                 : received / total;
           },
+          cancellationToken: cancellationToken,
         );
     if (context.mounted && dialogOpen) {
       Navigator.of(context, rootNavigator: true).pop();
     }
     await dialogFuture;
-    await ref.read(apkInstallerProvider).installApk(file.path);
-  } on InstallPermissionRequiredException {
+    if (!context.mounted) {
+      return;
+    }
+    await _installDownloadedUpdate(context, ref, file.path);
+  } on UpdateCancelledException {
     if (context.mounted && dialogOpen) {
       Navigator.of(context, rootNavigator: true).pop();
     }
     await dialogFuture;
     if (context.mounted) {
-      await _showInstallPermissionDialog(context, ref);
+      _showSnackBar(context, 'Update download cancelled.');
     }
   } on UpdateException catch (error) {
     if (context.mounted && dialogOpen) {
@@ -2083,9 +2101,39 @@ Future<void> _downloadAndInstallUpdate(
   }
 }
 
-Future<void> _showInstallPermissionDialog(
+Future<void> _installDownloadedUpdate(
   BuildContext context,
   WidgetRef ref,
+  String apkPath,
+) async {
+  final installer = ref.read(apkInstallerProvider);
+  try {
+    await installer.installApk(apkPath);
+    return;
+  } on InstallPermissionRequiredException {
+    // Continue below so the completed APK can be reused after permission setup.
+  }
+
+  if (!context.mounted) {
+    return;
+  }
+  final retry = await _showInstallPermissionDialog(context, installer);
+  if (!retry || !context.mounted) {
+    return;
+  }
+
+  try {
+    await installer.installApk(apkPath);
+  } on InstallPermissionRequiredException {
+    throw const ApkInstallException(
+      'Install permission is still disabled for Recall.',
+    );
+  }
+}
+
+Future<bool> _showInstallPermissionDialog(
+  BuildContext context,
+  ApkInstaller installer,
 ) async {
   final openSettings = await showDialog<bool>(
     context: context,
@@ -2106,8 +2154,32 @@ Future<void> _showInstallPermissionDialog(
       ],
     ),
   );
-  if (openSettings == true) {
-    await ref.read(apkInstallerProvider).openInstallPermissionSettings();
+  if (openSettings != true) {
+    return false;
+  }
+
+  await _openInstallSettingsAndWaitForResume(installer);
+  return true;
+}
+
+Future<void> _openInstallSettingsAndWaitForResume(
+  ApkInstaller installer,
+) async {
+  final resumed = Completer<void>();
+  late final AppLifecycleListener lifecycleListener;
+  lifecycleListener = AppLifecycleListener(
+    onResume: () {
+      if (!resumed.isCompleted) {
+        resumed.complete();
+      }
+    },
+  );
+
+  try {
+    await installer.openInstallPermissionSettings();
+    await resumed.future;
+  } finally {
+    lifecycleListener.dispose();
   }
 }
 
