@@ -1,5 +1,8 @@
 package app.recall.notes
 
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -11,12 +14,17 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.nio.LongBuffer
 import java.security.MessageDigest
 import java.util.TimeZone
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val apkInstallerChannel = "app.recall.notes/apk_installer"
     private val deviceChannel = "app.recall.notes/device"
+    private val moodModelChannel = "app.recall.notes/mood_model"
+    private val moodExecutor = Executors.newSingleThreadExecutor()
+    private var moodSession: OrtSession? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -48,6 +56,115 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, moodModelChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "classify" -> classifyMood(call.argument("inputIds"), result)
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        moodExecutor.execute {
+            moodSession?.close()
+            moodSession = null
+        }
+        moodExecutor.shutdown()
+        super.onDestroy()
+    }
+
+    private fun classifyMood(rawInputIds: Any?, result: MethodChannel.Result) {
+        val rows = rawInputIds as? List<*>
+        if (rows.isNullOrEmpty() || rows.size > 2) {
+            result.error("invalid_input", "One or two mood model inputs are required.", null)
+            return
+        }
+
+        val inputIds = try {
+            rows.map { rawRow ->
+                val row = rawRow as? List<*>
+                    ?: throw IllegalArgumentException("Mood model input must be a list.")
+                if (row.size !in 2..64) {
+                    throw IllegalArgumentException("Mood model input length is invalid.")
+                }
+                row.map { rawValue ->
+                    val value = (rawValue as? Number)?.toLong()
+                        ?: throw IllegalArgumentException("Mood model token is invalid.")
+                    if (value !in 0..50264) {
+                        throw IllegalArgumentException("Mood model token is out of range.")
+                    }
+                    value
+                }
+            }
+        } catch (error: IllegalArgumentException) {
+            result.error("invalid_input", error.message, null)
+            return
+        }
+
+        moodExecutor.execute {
+            try {
+                val output = runMoodModel(inputIds)
+                runOnUiThread { result.success(output) }
+            } catch (_: Exception) {
+                runOnUiThread {
+                    result.error("inference_failed", "On-device mood analysis failed.", null)
+                }
+            }
+        }
+    }
+
+    private fun runMoodModel(inputRows: List<List<Long>>): List<List<Double>> {
+        val sequenceLength = inputRows.maxOf { it.size }
+        val flattenedIds = LongArray(inputRows.size * sequenceLength) { 1 }
+        val attentionMask = LongArray(flattenedIds.size)
+        inputRows.forEachIndexed { rowIndex, row ->
+            row.forEachIndexed { columnIndex, token ->
+                val offset = rowIndex * sequenceLength + columnIndex
+                flattenedIds[offset] = token
+                attentionMask[offset] = 1
+            }
+        }
+
+        val environment = OrtEnvironment.getEnvironment()
+        val shape = longArrayOf(inputRows.size.toLong(), sequenceLength.toLong())
+        OnnxTensor.createTensor(environment, LongBuffer.wrap(flattenedIds), shape).use { idsTensor ->
+            OnnxTensor.createTensor(environment, LongBuffer.wrap(attentionMask), shape).use { maskTensor ->
+                val inputs = mapOf(
+                    "input_ids" to idsTensor,
+                    "attention_mask" to maskTensor,
+                )
+                getMoodSession(environment).run(inputs).use { outputs ->
+                    @Suppress("UNCHECKED_CAST")
+                    val logits = outputs[0].value as? Array<FloatArray>
+                        ?: throw IllegalStateException("Mood model output type is invalid.")
+                    if (logits.size != inputRows.size || logits.any { it.size != 28 }) {
+                        throw IllegalStateException("Mood model output shape is invalid.")
+                    }
+                    return logits.map { row -> row.map { it.toDouble() } }
+                }
+            }
+        }
+    }
+
+    private fun getMoodSession(environment: OrtEnvironment): OrtSession {
+        moodSession?.let { return it }
+        val model = assets.open(MOOD_MODEL_ASSET).use { it.readBytes() }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(model)
+            .joinToString("") { byte -> "%02x".format(byte) }
+        if (digest != MOOD_MODEL_SHA256) {
+            throw SecurityException("Bundled mood model integrity check failed.")
+        }
+
+        val session = OrtSession.SessionOptions().use { options ->
+            options.setInterOpNumThreads(1)
+            options.setIntraOpNumThreads(2)
+            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            environment.createSession(model, options)
+        }
+        moodSession = session
+        return session
     }
 
     private fun installApk(path: String, result: MethodChannel.Result) {
@@ -167,5 +284,12 @@ class MainActivity : FlutterActivity() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         startActivity(intent)
+    }
+
+    companion object {
+        private const val MOOD_MODEL_ASSET =
+            "flutter_assets/assets/models/recall_goemotions_v2.onnx"
+        private const val MOOD_MODEL_SHA256 =
+            "594ac3bf3c82e2ea187e50982ea2f811ede5377eaad0c8ad23bc04ee8a2486c6"
     }
 }

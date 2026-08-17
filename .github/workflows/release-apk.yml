@@ -74,6 +74,7 @@ jobs:
       - name: Check Flutter app
         working-directory: app
         run: |
+          (cd assets/models && sha256sum --check SHA256SUMS)
           flutter pub get
           flutter analyze
           flutter test

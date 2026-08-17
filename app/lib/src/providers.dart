@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'account/auth_service.dart';
 import 'account/secure_account_store.dart';
 import 'data/local_database.dart';
+import 'notes/mood_analyzer.dart';
 import 'notes/note_models.dart';
 import 'notes/notes_repository.dart';
 import 'reminders/reminder_scheduler.dart';
@@ -21,8 +22,15 @@ final localDatabaseProvider = Provider<LocalDatabase>((ref) {
   return database;
 });
 
+final moodAnalyzerProvider = Provider<MoodAnalyzer>((ref) {
+  return RecallMoodAnalyzer();
+});
+
 final notesRepositoryProvider = Provider<NotesRepository>((ref) {
-  return NotesRepository(ref.watch(localDatabaseProvider));
+  return NotesRepository(
+    ref.watch(localDatabaseProvider),
+    moodAnalyzer: ref.watch(moodAnalyzerProvider),
+  );
 });
 
 final notePreviewsProvider = StreamProvider<List<NotePreview>>((ref) {

@@ -1,15 +1,13 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'note_models.dart';
+import 'roberta_tokenizer.dart';
 
-const currentMoodModelVersion = 1;
-const _modelAsset = 'assets/models/recall_goemotions_v1.bin';
-const _featureBuckets = 32768;
-const _maxAnalysisCharacters = 8192;
-const _maxAnalysisTokens = 256;
+const currentMoodModelVersion = 2;
+const _emotionLabelCount = 28;
 
 class MoodAnalysis {
   const MoodAnalysis({
@@ -33,8 +31,15 @@ abstract interface class MoodAnalyzer {
   });
 }
 
+abstract interface class ContextualEmotionClassifier {
+  Future<List<List<double>>> classify(List<String> texts);
+}
+
 class RecallMoodAnalyzer implements MoodAnalyzer {
-  Future<_EmotionModel>? _model;
+  RecallMoodAnalyzer({ContextualEmotionClassifier? classifier})
+    : _classifier = classifier ?? AndroidOnnxEmotionClassifier();
+
+  final ContextualEmotionClassifier _classifier;
 
   @override
   Future<MoodAnalysis> analyze({
@@ -59,7 +64,9 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
       );
     }
 
-    if (title.trim().isEmpty && body.trim().isEmpty) {
+    final cleanTitle = title.trim();
+    final cleanBody = body.trim();
+    if (cleanTitle.isEmpty && cleanBody.isEmpty) {
       return const MoodAnalysis(
         mood: ColorMood.clear,
         confidence: 1,
@@ -68,8 +75,16 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
     }
 
     try {
-      final model = await (_model ??= _EmotionModel.load());
-      return model.analyze(title: title, body: body);
+      final texts = <String>[
+        if (cleanTitle.isNotEmpty) cleanTitle,
+        if (cleanBody.isNotEmpty) cleanBody,
+      ];
+      final scores = await _classifier.classify(texts);
+      return _analyzeScores(
+        scores,
+        hasTitle: cleanTitle.isNotEmpty,
+        hasBody: cleanBody.isNotEmpty,
+      );
     } on Object {
       return const MoodAnalysis(
         mood: ColorMood.clear,
@@ -80,139 +95,96 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
   }
 }
 
-class _EmotionModel {
-  _EmotionModel(this._labels);
+class AndroidOnnxEmotionClassifier implements ContextualEmotionClassifier {
+  AndroidOnnxEmotionClassifier({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel(_channelName);
 
-  final List<_LabelModel> _labels;
+  static const _channelName = 'app.recall.notes/mood_model';
 
-  static Future<_EmotionModel> load() async {
-    final data = await rootBundle.load(_modelAsset);
-    final bytes = data.buffer.asUint8List(
-      data.offsetInBytes,
-      data.lengthInBytes,
-    );
-    if (bytes.length < 12 ||
-        String.fromCharCodes(bytes.take(4)) != 'RCLM' ||
-        data.getUint16(4, Endian.little) != currentMoodModelVersion ||
-        data.getUint16(6, Endian.little) != _Emotion.values.length ||
-        data.getUint32(8, Endian.little) != _featureBuckets) {
-      throw const FormatException('Recall mood model is invalid.');
+  final MethodChannel _channel;
+  Future<RobertaTokenizer>? _tokenizer;
+
+  @override
+  Future<List<List<double>>> classify(List<String> texts) async {
+    if (texts.isEmpty) {
+      return const [];
     }
-
-    var offset = 12;
-    final labels = <_LabelModel>[];
-    for (var index = 0; index < _Emotion.values.length; index++) {
-      final bias = data.getFloat32(offset, Endian.little);
-      final scale = data.getFloat32(offset + 4, Endian.little);
-      if (!bias.isFinite || !scale.isFinite || scale <= 0 || scale > 100) {
-        throw const FormatException('Recall mood model has invalid weights.');
-      }
-      offset += 8;
-      final end = offset + _featureBuckets;
-      if (end > bytes.length) {
-        throw const FormatException('Recall mood model is truncated.');
-      }
-      labels.add(
-        _LabelModel(
-          bias: bias,
-          scale: scale,
-          weights: Int8List.sublistView(bytes, offset, end),
-        ),
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      throw UnsupportedError(
+        'The bundled mood model runtime is currently available on Android.',
       );
-      offset = end;
     }
-    if (offset != bytes.length) {
-      throw const FormatException('Recall mood model has trailing data.');
-    }
-    return _EmotionModel(labels);
-  }
-
-  MoodAnalysis analyze({required String title, required String body}) {
-    final titleScores = title.trim().isEmpty ? null : _scores(title);
-    final bodyScores = body.trim().isEmpty ? null : _scores(body);
-    final scores = List<double>.generate(_labels.length, (index) {
-      if (titleScores == null) return bodyScores![index];
-      if (bodyScores == null) return titleScores[index];
-      return titleScores[index] * 0.2 + bodyScores[index] * 0.8;
+    final tokenizer = await (_tokenizer ??= RobertaTokenizer.load());
+    final inputIds = texts.map(tokenizer.encode).toList(growable: false);
+    final rawOutput = await _channel.invokeMethod<List<Object?>>('classify', {
+      'inputIds': inputIds,
     });
-
-    final grouped = <ColorMood, double>{};
-    for (var index = 0; index < scores.length; index++) {
-      final mood = _emotionMoods[_Emotion.values[index]]!;
-      grouped[mood] = math.max(
-        grouped[mood] ?? double.negativeInfinity,
-        scores[index],
-      );
+    if (rawOutput == null || rawOutput.length != texts.length) {
+      throw const FormatException('Recall mood model returned invalid output.');
     }
-    final ranked = grouped.entries.toList()
-      ..sort((left, right) => right.value.compareTo(left.value));
-    final winner = ranked.first;
-    final confidence = _sigmoid(winner.value);
-    final margin = winner.value - ranked[1].value;
-    final accepted =
-        winner.key != ColorMood.clear && confidence >= 0.64 && margin >= 0.35;
 
-    return MoodAnalysis(
-      mood: accepted ? winner.key : ColorMood.clear,
-      confidence: confidence,
-      modelVersion: currentMoodModelVersion,
-    );
-  }
-
-  List<double> _scores(String text) {
-    final features = _features(text);
-    final featureScale = 1 / math.sqrt(math.max(1, features.length));
-    return _labels
-        .map((label) {
-          var score = label.bias;
-          for (final feature in features) {
-            score += label.weights[feature] * label.scale * featureScale;
+    return rawOutput
+        .map((row) {
+          if (row is! List || row.length != _emotionLabelCount) {
+            throw const FormatException(
+              'Recall mood model returned invalid scores.',
+            );
           }
-          return score;
+          final values = row
+              .map((value) {
+                if (value is! num || !value.isFinite) {
+                  throw const FormatException(
+                    'Recall mood model returned a non-finite score.',
+                  );
+                }
+                return value.toDouble();
+              })
+              .toList(growable: false);
+          return values;
         })
         .toList(growable: false);
   }
 }
 
-class _LabelModel {
-  const _LabelModel({
-    required this.bias,
-    required this.scale,
-    required this.weights,
+MoodAnalysis _analyzeScores(
+  List<List<double>> scores, {
+  required bool hasTitle,
+  required bool hasBody,
+}) {
+  final expectedRows = hasTitle && hasBody ? 2 : 1;
+  if (scores.length != expectedRows ||
+      scores.any((row) => row.length != _emotionLabelCount)) {
+    throw const FormatException('Recall mood model score shape is invalid.');
+  }
+
+  final blended = List<double>.generate(_emotionLabelCount, (index) {
+    if (!hasTitle || !hasBody) {
+      return scores.single[index];
+    }
+    return scores[0][index] * 0.2 + scores[1][index] * 0.8;
   });
 
-  final double bias;
-  final double scale;
-  final Int8List weights;
-}
-
-Set<int> _features(String text) {
-  final boundedText = text.length <= _maxAnalysisCharacters
-      ? text
-      : text.substring(0, _maxAnalysisCharacters);
-  final words = RegExp(r"[a-z]+(?:'[a-z]+)?|[0-9]+")
-      .allMatches(boundedText.toLowerCase())
-      .map((match) => match.group(0)!)
-      .take(_maxAnalysisTokens)
-      .toList(growable: false);
-  final features = <int>{
-    for (final word in words) _fnv1a('u:$word') % _featureBuckets,
-  };
-  for (var index = 1; index < words.length; index++) {
-    features.add(
-      _fnv1a('b:${words[index - 1]}_${words[index]}') % _featureBuckets,
+  final grouped = <ColorMood, double>{};
+  for (var index = 0; index < blended.length; index++) {
+    final mood = _emotionMoods[_Emotion.values[index]]!;
+    grouped[mood] = math.max(
+      grouped[mood] ?? double.negativeInfinity,
+      blended[index],
     );
   }
-  return features;
-}
+  final ranked = grouped.entries.toList()
+    ..sort((left, right) => right.value.compareTo(left.value));
+  final winner = ranked.first;
+  final confidence = _sigmoid(winner.value);
+  final margin = winner.value - ranked[1].value;
+  final accepted =
+      winner.key != ColorMood.clear && confidence >= 0.64 && margin >= 0.35;
 
-int _fnv1a(String value) {
-  var hash = 0x811C9DC5;
-  for (final byte in Uint8List.fromList(value.codeUnits)) {
-    hash ^= byte;
-    hash = (hash * 0x01000193) & 0xFFFFFFFF;
-  }
-  return hash;
+  return MoodAnalysis(
+    mood: accepted ? winner.key : ColorMood.clear,
+    confidence: confidence,
+    modelVersion: currentMoodModelVersion,
+  );
 }
 
 double _sigmoid(double value) {

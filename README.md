@@ -60,6 +60,9 @@ flutter run
 
 The first app target is Android.
 
+Bundled model and runtime licenses are documented in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 An optional default backup URL can be compiled into development builds:
 
 ```bash

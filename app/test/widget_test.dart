@@ -10,6 +10,7 @@ import 'package:drift/native.dart';
 import 'package:recall_app/main.dart';
 import 'package:recall_app/src/account/secure_account_store.dart';
 import 'package:recall_app/src/data/local_database.dart';
+import 'package:recall_app/src/notes/mood_analyzer.dart';
 import 'package:recall_app/src/notes/note_models.dart';
 import 'package:recall_app/src/notes/notes_repository.dart';
 import 'package:recall_app/src/providers.dart';
@@ -155,7 +156,10 @@ void main() {
   ) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
-    final repository = NotesRepository(database);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
     final today = DateTime.now();
     final expectedDate = DateTime(
       today.year,
@@ -167,6 +171,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
           storedSessionProvider.overrideWith((ref) async => null),
@@ -213,7 +218,10 @@ void main() {
   ) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
-    final repository = NotesRepository(database);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
     final today = DateTime.now();
     final tomorrow = DateTime(today.year, today.month, today.day + 1, 13);
     final noteId = await repository.createTextNote(
@@ -229,6 +237,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
           storedSessionProvider.overrideWith((ref) async => null),
@@ -305,7 +314,10 @@ void main() {
   testWidgets('swiping a note archives it with undo feedback', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
-    final repository = NotesRepository(database);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
     final noteId = await repository.createTextNote(
       title: 'Swipe me',
       body: 'Archive this note from the home screen.',
@@ -315,6 +327,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
           storedSessionProvider.overrideWith((ref) async => null),
           backgroundStartupEnabledProvider.overrideWithValue(false),
@@ -348,6 +361,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(
             _FailingCancellationReminderScheduler(),
@@ -389,6 +403,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -438,6 +453,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -486,6 +502,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -530,6 +547,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -565,7 +583,10 @@ void main() {
   ) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
-    final repository = NotesRepository(database);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
     final noteId = await repository.createTextNote(
       title: 'Trash me',
       body: 'Close after moving this note.',
@@ -574,6 +595,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith(
             (ref) => Stream.value([
               NotePreview(
@@ -624,7 +646,10 @@ void main() {
   testWidgets('notification tap opens the linked note', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
-    final repository = NotesRepository(database);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
     final noteId = await repository.createTextNote(
       title: 'Open from reminder',
       body: 'The notification links here.',
@@ -635,6 +660,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith(
             (ref) => Stream.value(const [
               NotePreview(
@@ -701,6 +727,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -738,6 +765,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -779,6 +807,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
           reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
           syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
@@ -869,6 +898,7 @@ void main() {
       ProviderScope(
         overrides: [
           localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
           notePreviewsProvider.overrideWith((ref) => Stream.value(sampleNotes)),
           storedSessionProvider.overrideWith((ref) async => session),
           syncServiceProvider.overrideWithValue(
@@ -992,6 +1022,23 @@ class _PermissionRetryApkInstaller extends _RecordingApkInstaller {
   @override
   Future<void> openInstallPermissionSettings() async {
     settingsOpenAttempts += 1;
+  }
+}
+
+class _ClearMoodAnalyzer implements MoodAnalyzer {
+  @override
+  Future<MoodAnalysis> analyze({
+    required String title,
+    required String body,
+    Iterable<String> checklistItems = const [],
+    NoteReminder? reminder,
+    DateTime? now,
+  }) async {
+    return const MoodAnalysis(
+      mood: ColorMood.clear,
+      confidence: 1,
+      modelVersion: currentMoodModelVersion,
+    );
   }
 }
 

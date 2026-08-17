@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/data/local_database.dart';
+import 'package:recall_app/src/notes/mood_analyzer.dart';
 import 'package:recall_app/src/notes/note_models.dart';
 import 'package:recall_app/src/notes/notes_repository.dart';
 
@@ -11,7 +12,10 @@ void main() {
 
   setUp(() {
     database = LocalDatabase.forTesting(NativeDatabase.memory());
-    repository = NotesRepository(database);
+    repository = NotesRepository(
+      database,
+      moodAnalyzer: RecallMoodAnalyzer(classifier: _NeutralEmotionClassifier()),
+    );
   });
 
   tearDown(() async {
@@ -59,7 +63,7 @@ void main() {
       expect(loaded?.mood, ColorMood.errand);
       expect(loaded?.moodIsAutomatic, isTrue);
       var stored = await database.select(database.notes).getSingle();
-      expect(stored.moodModelVersion, 1);
+      expect(stored.moodModelVersion, 2);
       expect(stored.moodConfidence, inInclusiveRange(0, 1));
 
       await repository.updateTextNote(
@@ -249,4 +253,14 @@ void main() {
     expect(restored, hasLength(1));
     expect(restored.single.archived, isTrue);
   });
+}
+
+class _NeutralEmotionClassifier implements ContextualEmotionClassifier {
+  @override
+  Future<List<List<double>>> classify(List<String> texts) async {
+    return [
+      for (final _ in texts)
+        [for (var index = 0; index < 28; index++) index == 27 ? 6.0 : -6.0],
+    ];
+  }
 }

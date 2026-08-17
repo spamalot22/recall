@@ -3,12 +3,10 @@ import 'package:recall_app/src/notes/mood_analyzer.dart';
 import 'package:recall_app/src/notes/note_models.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late RecallMoodAnalyzer analyzer;
 
   setUp(() {
-    analyzer = RecallMoodAnalyzer();
+    analyzer = RecallMoodAnalyzer(classifier: _FixtureEmotionClassifier());
   });
 
   Future<void> expectMood(String body, ColorMood mood) async {
@@ -18,7 +16,7 @@ void main() {
     expect(result.modelVersion, currentMoodModelVersion);
   }
 
-  test('learns ordinary emotional words without hand-authored rules', () async {
+  test('maps contextual emotion scores to colour moods', () async {
     await expectMood('This is good', ColorMood.warm);
     await expectMood('This is bad', ColorMood.intense);
     await expectMood('I feel happy today', ColorMood.joyful);
@@ -27,6 +25,13 @@ void main() {
     await expectMood('I am nervous about tomorrow', ColorMood.tense);
     await expectMood('What a surprise', ColorMood.surprised);
   });
+
+  test(
+    'recognizes emotion in a sentence instead of defaulting to clear',
+    () async {
+      await expectMood('a bad thing happened today', ColorMood.reflective);
+    },
+  );
 
   test('body has more influence than title', () async {
     final result = await analyzer.analyze(
@@ -47,6 +52,51 @@ void main() {
 
   test('empty and uncertain notes remain neutral', () async {
     await expectMood('', ColorMood.clear);
+    await expectMood('bad', ColorMood.clear);
     await expectMood('the of and', ColorMood.clear);
   });
+
+  test('fails closed when on-device inference is unavailable', () async {
+    final unavailable = RecallMoodAnalyzer(
+      classifier: _UnavailableEmotionClassifier(),
+    );
+    final result = await unavailable.analyze(title: '', body: 'I feel sad');
+    expect(result.mood, ColorMood.clear);
+    expect(result.confidence, 0);
+    expect(result.modelVersion, 0);
+  });
+}
+
+class _FixtureEmotionClassifier implements ContextualEmotionClassifier {
+  static const _labels = {
+    'This is good': 0,
+    'This is bad': 11,
+    'I feel happy today': 17,
+    'I feel sad today': 25,
+    'I feel sad and disappointed today': 25,
+    'I love my family': 18,
+    'I am nervous about tomorrow': 19,
+    'What a surprise': 26,
+    'a bad thing happened today': 25,
+    'bad': 27,
+    'the of and': 27,
+  };
+
+  @override
+  Future<List<List<double>>> classify(List<String> texts) async {
+    return texts
+        .map((text) {
+          final scores = List<double>.filled(28, -6);
+          scores[_labels[text] ?? 27] = 4;
+          return scores;
+        })
+        .toList(growable: false);
+  }
+}
+
+class _UnavailableEmotionClassifier implements ContextualEmotionClassifier {
+  @override
+  Future<List<List<double>>> classify(List<String> texts) {
+    throw StateError('Native runtime is unavailable.');
+  }
 }
