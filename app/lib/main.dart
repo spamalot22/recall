@@ -2244,7 +2244,10 @@ class NoteEditorPage extends ConsumerStatefulWidget {
 
 enum _EditorAction { moveToTrash, discard }
 
-class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
+class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
+    with WidgetsBindingObserver {
+  static const _autosaveDelay = Duration(milliseconds: 750);
+
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
   final _bodyFocusNode = FocusNode();
@@ -2261,12 +2264,21 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   bool _dirty = false;
   bool _hydrating = false;
   bool _hadReminder = false;
+  bool _discarding = false;
+  String? _persistedNoteId;
+  Timer? _autosaveTimer;
+  Future<void>? _autosaveFuture;
+  bool _autosaveAgain = false;
+  int _draftRevision = 0;
+  int _persistedRevision = 0;
 
   bool get _editing => widget.noteId != null;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _persistedNoteId = widget.noteId;
     _hydrating = _editing;
     _titleController.addListener(_onTextChanged);
     _bodyController.addListener(_onTextChanged);
@@ -2283,6 +2295,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _autosaveTimer?.cancel();
     _titleController.dispose();
     _bodyController.dispose();
     _bodyFocusNode.dispose();
@@ -2290,6 +2304,17 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       item.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_editing &&
+        (state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.detached)) {
+      unawaited(_flushAutosave());
+    }
   }
 
   Future<void> _loadNote() async {
@@ -2326,13 +2351,36 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     if (_hydrating || !mounted) {
       return;
     }
-    setState(() => _dirty = true);
+    _markDraftChanged();
   }
 
   void _updateDraft(VoidCallback update) {
     setState(() {
       update();
       _dirty = true;
+      _draftRevision++;
+    });
+    _scheduleAutosave();
+  }
+
+  void _markDraftChanged() {
+    setState(() {
+      _dirty = true;
+      _draftRevision++;
+    });
+    _scheduleAutosave();
+  }
+
+  void _scheduleAutosave() {
+    if (_editing || _saving || _discarding) {
+      return;
+    }
+    _autosaveTimer?.cancel();
+    if (!_hasDraftContent() && _persistedNoteId == null) {
+      return;
+    }
+    _autosaveTimer = Timer(_autosaveDelay, () {
+      unawaited(_flushAutosave());
     });
   }
 
@@ -2694,7 +2742,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   void _onChecklistChanged() {
     if (mounted) {
-      setState(() => _dirty = true);
+      _markDraftChanged();
     }
   }
 
@@ -2895,17 +2943,163 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     );
   }
 
-  Future<void> _discardNewNote() async {
-    final hasContent =
-        _titleController.text.trim().isNotEmpty ||
+  bool _hasDraftContent() {
+    return _titleController.text.trim().isNotEmpty ||
         _bodyController.text.trim().isNotEmpty ||
         _checklistItems.any((item) => item.controller.text.trim().isNotEmpty);
+  }
+
+  _NoteDraftSnapshot _captureDraft() {
+    return _NoteDraftSnapshot(
+      title: _titleController.text,
+      body: _bodyController.text,
+      mood: _moodWasPicked ? _mood : null,
+      pinned: _pinned,
+      checklistItems: _isChecklist
+          ? _checklistItems.map((item) => item.toModel()).toList()
+          : const <ChecklistItemDraft>[],
+      reminder: _reminderAt == null
+          ? null
+          : NoteReminder(nextFireAt: _reminderAt!, recurrence: _recurrence),
+    );
+  }
+
+  Future<String> _persistDraftSnapshot(_NoteDraftSnapshot draft) async {
+    final repository = ref.read(notesRepositoryProvider);
+    final existingId = _persistedNoteId;
+    if (existingId == null) {
+      final createdId = await repository.createTextNote(
+        title: draft.title,
+        body: draft.body,
+        mood: draft.mood,
+        pinned: draft.pinned,
+        checklistItems: draft.checklistItems,
+        reminder: draft.reminder,
+      );
+      _persistedNoteId = createdId;
+      return createdId;
+    }
+
+    await repository.updateTextNote(
+      id: existingId,
+      title: draft.title,
+      body: draft.body,
+      mood: draft.mood,
+      pinned: draft.pinned,
+      checklistItems: draft.checklistItems,
+      reminder: draft.reminder,
+    );
+    return existingId;
+  }
+
+  Future<void> _reconcileDraftReminderQuietly(
+    String noteId,
+    _NoteDraftSnapshot draft,
+  ) async {
+    try {
+      final scheduler = ref.read(reminderSchedulerProvider);
+      if (draft.reminder == null) {
+        if (_hadReminder) {
+          await scheduler.cancelNoteReminder(noteId);
+        }
+      } else {
+        await scheduler.scheduleNoteReminder(
+          noteId: noteId,
+          title: draft.title,
+          body: draft.body,
+          reminder: draft.reminder!,
+          requestPermissions: false,
+        );
+      }
+      _hadReminder = draft.reminder != null;
+    } on Object {
+      // Done retries reminder scheduling and reports actionable failures.
+    }
+  }
+
+  Future<void> _flushAutosave() {
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
+    if (_editing ||
+        _saving ||
+        _discarding ||
+        (!_hasDraftContent() && _persistedNoteId == null) ||
+        _draftRevision <= _persistedRevision) {
+      return Future<void>.value();
+    }
+
+    final activeAutosave = _autosaveFuture;
+    if (activeAutosave != null) {
+      _autosaveAgain = true;
+      return activeAutosave;
+    }
+
+    late final Future<void> autosave;
+    autosave = _runAutosaveLoop().whenComplete(() {
+      if (identical(_autosaveFuture, autosave)) {
+        _autosaveFuture = null;
+      }
+    });
+    _autosaveFuture = autosave;
+    return autosave;
+  }
+
+  Future<void> _runAutosaveLoop() async {
+    do {
+      _autosaveAgain = false;
+      if (_discarding || _draftRevision <= _persistedRevision) {
+        break;
+      }
+      final revision = _draftRevision;
+      if (!_hasDraftContent()) {
+        try {
+          await _removePersistedDraft();
+          _persistedRevision = revision;
+          if (mounted && _draftRevision == revision) {
+            setState(() => _dirty = false);
+          }
+        } on Object {
+          break;
+        }
+        continue;
+      }
+      final draft = _captureDraft();
+      try {
+        final noteId = await _persistDraftSnapshot(draft);
+        await _reconcileDraftReminderQuietly(noteId, draft);
+        _persistedRevision = revision;
+        if (mounted && _draftRevision == revision) {
+          setState(() => _dirty = false);
+        }
+      } on Object {
+        break;
+      }
+    } while (_autosaveAgain || _draftRevision > _persistedRevision);
+  }
+
+  Future<void> _removePersistedDraft() async {
+    final noteId = _persistedNoteId;
+    if (noteId == null) {
+      return;
+    }
+    try {
+      await ref.read(reminderSchedulerProvider).cancelNoteReminder(noteId);
+    } on Object {
+      // Removing the database record also removes its reminder definition.
+    }
+    await ref.read(syncServiceProvider).queueDeletion(noteId);
+    await ref.read(notesRepositoryProvider).permanentlyDeleteNote(noteId);
+    _persistedNoteId = null;
+  }
+
+  Future<void> _discardNewNote() async {
+    final hasContent = _hasDraftContent();
     if (hasContent) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('Discard this draft?'),
-          content: const Text('This note has not been saved yet.'),
+          content: const Text('This draft will be removed.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -2922,27 +3116,53 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         return;
       }
     }
-    _dirty = false;
-    Navigator.of(context).pop();
+    _discarding = true;
+    _autosaveTimer?.cancel();
+    setState(() => _saving = true);
+    try {
+      await _autosaveFuture;
+      await _removePersistedDraft();
+      _dirty = false;
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } on Object {
+      if (mounted) {
+        _showSnackBar(context, 'Could not discard this draft.');
+      }
+    } finally {
+      _discarding = false;
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
   }
 
   Future<void> _save() async {
-    final title = _titleController.text;
-    final body = _bodyController.text;
-    final checklistItems = _isChecklist
-        ? _checklistItems.map((item) => item.toModel()).toList()
-        : const <ChecklistItemDraft>[];
-    if (!_editing &&
-        title.trim().isEmpty &&
-        body.trim().isEmpty &&
-        checklistItems.every((item) => item.text.trim().isEmpty)) {
-      _dirty = false;
-      Navigator.of(context).pop();
+    _autosaveTimer?.cancel();
+    _autosaveTimer = null;
+    var draft = _captureDraft();
+    if (!_editing && !_hasDraftContent()) {
+      setState(() => _saving = true);
+      try {
+        await _autosaveFuture;
+        await _removePersistedDraft();
+        _dirty = false;
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      } on Object {
+        if (mounted) {
+          _showSnackBar(context, 'Could not close this empty draft.');
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _saving = false);
+        }
+      }
       return;
     }
-    final reminder = _reminderAt == null
-        ? null
-        : NoteReminder(nextFireAt: _reminderAt!, recurrence: _recurrence);
+    final reminder = draft.reminder;
     if (reminder != null &&
         !reminder.repeats &&
         !reminder.nextFireAt.isAfter(DateTime.now())) {
@@ -2955,35 +3175,17 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       final repository = ref.read(notesRepositoryProvider);
       final scheduler = ref.read(reminderSchedulerProvider);
       final syncService = ref.read(syncServiceProvider);
-      final noteId = _editing
-          ? widget.noteId!
-          : await repository.createTextNote(
-              title: title,
-              body: body,
-              mood: _moodWasPicked ? _mood : null,
-              pinned: _pinned,
-              checklistItems: checklistItems,
-              reminder: reminder,
-            );
-      if (_editing) {
-        await repository.updateTextNote(
-          id: noteId,
-          title: title,
-          body: body,
-          mood: _moodWasPicked ? _mood : null,
-          pinned: _pinned,
-          checklistItems: checklistItems,
-          reminder: reminder,
-        );
-      }
+      await _autosaveFuture;
+      draft = _captureDraft();
+      final noteId = await _persistDraftSnapshot(draft);
       try {
         if (reminder == null && _hadReminder) {
           await scheduler.cancelNoteReminder(noteId);
         } else if (reminder != null) {
           await scheduler.scheduleNoteReminder(
             noteId: noteId,
-            title: title,
-            body: body,
+            title: draft.title,
+            body: draft.body,
             reminder: reminder,
           );
         }
@@ -2992,6 +3194,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         reminderProblem = true;
       }
       if (mounted) {
+        _persistedRevision = _draftRevision;
         _dirty = false;
         unawaited(
           (() async {
@@ -3031,6 +3234,24 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       }
     }
   }
+}
+
+class _NoteDraftSnapshot {
+  const _NoteDraftSnapshot({
+    required this.title,
+    required this.body,
+    required this.mood,
+    required this.pinned,
+    required this.checklistItems,
+    required this.reminder,
+  });
+
+  final String title;
+  final String body;
+  final ColorMood? mood;
+  final bool pinned;
+  final List<ChecklistItemDraft> checklistItems;
+  final NoteReminder? reminder;
 }
 
 class _ChecklistDraft {

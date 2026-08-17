@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:dynamic_color/samples.dart';
-import 'package:dynamic_color/test_utils.dart';
+import 'package:dynamic_color_testing/dynamic_color_testing.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -379,6 +378,186 @@ void main() {
       find.text('Note saved, but the reminder could not be scheduled.'),
       findsNothing,
     );
+  });
+
+  testWidgets('new note autosaves while typing and Done reuses the draft', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    final bodyField = find.byKey(const Key('note-body-field'));
+    await tester.enterText(bodyField, 'Autosaved first version');
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+
+    var notes = await database.select(database.notes).get();
+    expect(notes, hasLength(1));
+    final autosavedId = notes.single.id;
+    expect(notes.single.body, 'Autosaved first version');
+    expect(find.byType(NoteEditorPage), findsOneWidget);
+
+    await tester.enterText(bodyField, 'Autosaved final version');
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Done'));
+    await tester.pumpAndSettle();
+
+    notes = await database.select(database.notes).get();
+    expect(notes, hasLength(1));
+    expect(notes.single.id, autosavedId);
+    expect(notes.single.body, 'Autosaved final version');
+    expect(find.byType(NoteEditorPage), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('backgrounding flushes a new note before the debounce', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Persisted as the app backgrounds',
+    );
+    for (final state in const [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+
+    final notes = await database.select(database.notes).get();
+    expect(notes, hasLength(1));
+    expect(notes.single.body, 'Persisted as the app backgrounds');
+
+    for (final state in const [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('discard removes an autosaved new-note draft', (tester) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Draft to discard',
+    );
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+    expect(await database.select(database.notes).get(), hasLength(1));
+
+    await tester.tap(find.byTooltip('Note actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Discard draft'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Discard'));
+    await tester.pumpAndSettle();
+
+    expect(await database.select(database.notes).get(), isEmpty);
+    expect(find.byType(NoteEditorPage), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('clearing an autosaved new note removes the persisted draft', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add_rounded));
+    await tester.pumpAndSettle();
+    final bodyField = find.byKey(const Key('note-body-field'));
+    await tester.enterText(bodyField, 'Temporary draft');
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+    expect(await database.select(database.notes).get(), hasLength(1));
+
+    await tester.enterText(bodyField, '');
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pumpAndSettle();
+
+    expect(await database.select(database.notes).get(), isEmpty);
+    expect(find.byType(NoteEditorPage), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
   });
 
   testWidgets('trashing closes the editor when reminder cleanup fails', (
@@ -870,6 +1049,9 @@ class _NoopSyncService extends SyncService {
 
   @override
   Future<int> pendingChangeCount() async => pendingCount;
+
+  @override
+  Future<void> queueDeletion(String noteId) async {}
 }
 
 class _MemoryBackgroundSyncStorage implements BackgroundSyncStorage {
