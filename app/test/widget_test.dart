@@ -444,6 +444,53 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   });
 
+  testWidgets(
+    'opening reminder while autosaving never starts native mood inference',
+    (tester) async {
+      final database = LocalDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+      final classifier = _UnexpectedEmotionClassifier();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localDatabaseProvider.overrideWithValue(database),
+            moodAnalyzerProvider.overrideWithValue(
+              RecallMoodAnalyzer(classifier: classifier),
+            ),
+            notePreviewsProvider.overrideWith((ref) => Stream.value(const [])),
+            reminderSchedulerProvider.overrideWithValue(
+              _NoopReminderScheduler(),
+            ),
+            syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+            storedSessionProvider.overrideWith((ref) async => null),
+            backgroundStartupEnabledProvider.overrideWithValue(false),
+          ],
+          child: const RecallApp(),
+        ),
+      );
+
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.add_rounded));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('note-body-field')),
+        'Keep this note and remind me tomorrow',
+      );
+      await tester.tap(find.byTooltip('Add reminder'));
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Add reminder'), findsOneWidget);
+      expect(classifier.calls, 0);
+      final notes = await database.select(database.notes).get();
+      expect(notes, hasLength(1));
+      expect(notes.single.body, 'Keep this note and remind me tomorrow');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 1));
+    },
+  );
+
   testWidgets('backgrounding flushes a new note before the debounce', (
     tester,
   ) async {
@@ -1039,6 +1086,16 @@ class _ClearMoodAnalyzer implements MoodAnalyzer {
       confidence: 1,
       modelVersion: currentMoodModelVersion,
     );
+  }
+}
+
+class _UnexpectedEmotionClassifier implements ContextualEmotionClassifier {
+  int calls = 0;
+
+  @override
+  Future<List<List<double>>> classify(List<String> texts) async {
+    calls++;
+    throw StateError('Native mood inference must remain disabled.');
   }
 }
 

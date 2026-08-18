@@ -36,10 +36,15 @@ abstract interface class ContextualEmotionClassifier {
 }
 
 class RecallMoodAnalyzer implements MoodAnalyzer {
-  RecallMoodAnalyzer({ContextualEmotionClassifier? classifier})
-    : _classifier = classifier ?? AndroidOnnxEmotionClassifier();
+  RecallMoodAnalyzer({
+    ContextualEmotionClassifier? classifier,
+    this.contextualAnalysisEnabled = const bool.fromEnvironment(
+      'ENABLE_CONTEXTUAL_MOODS',
+    ),
+  }) : _classifier = classifier ?? AndroidOnnxEmotionClassifier();
 
   final ContextualEmotionClassifier _classifier;
+  final bool contextualAnalysisEnabled;
 
   @override
   Future<MoodAnalysis> analyze({
@@ -71,6 +76,16 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
         mood: ColorMood.clear,
         confidence: 1,
         modelVersion: currentMoodModelVersion,
+      );
+    }
+
+    // Keep the native model behind an explicit build flag until its Android
+    // runtime has been validated across supported physical devices.
+    if (!contextualAnalysisEnabled) {
+      return const MoodAnalysis(
+        mood: ColorMood.clear,
+        confidence: 0,
+        modelVersion: 0,
       );
     }
 

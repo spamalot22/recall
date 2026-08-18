@@ -5,6 +5,11 @@ emotion classification entirely on the Android device. Note text is tokenized
 in Dart, and only token IDs cross the private Flutter-to-Android method channel.
 No note content or inference result is sent over the network.
 
+Production builds currently keep this native classifier disabled while its
+runtime is validated across supported physical devices. Functional automatic
+colours and manual colour selection remain available. Development builds can
+opt in with `--dart-define=ENABLE_CONTEXTUAL_MOODS=true`.
+
 ## Artifacts
 
 - `recall_goemotions_v2.onnx`: quantized six-layer MiniLMv2 model, 28

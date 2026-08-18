@@ -6,7 +6,10 @@ void main() {
   late RecallMoodAnalyzer analyzer;
 
   setUp(() {
-    analyzer = RecallMoodAnalyzer(classifier: _FixtureEmotionClassifier());
+    analyzer = RecallMoodAnalyzer(
+      classifier: _FixtureEmotionClassifier(),
+      contextualAnalysisEnabled: true,
+    );
   });
 
   Future<void> expectMood(String body, ColorMood mood) async {
@@ -59,8 +62,24 @@ void main() {
   test('fails closed when on-device inference is unavailable', () async {
     final unavailable = RecallMoodAnalyzer(
       classifier: _UnavailableEmotionClassifier(),
+      contextualAnalysisEnabled: true,
     );
     final result = await unavailable.analyze(title: '', body: 'I feel sad');
+    expect(result.mood, ColorMood.clear);
+    expect(result.confidence, 0);
+    expect(result.modelVersion, 0);
+  });
+
+  test('release default never enters the native contextual runtime', () async {
+    final classifier = _RecordingEmotionClassifier();
+    final releaseAnalyzer = RecallMoodAnalyzer(classifier: classifier);
+
+    final result = await releaseAnalyzer.analyze(
+      title: '',
+      body: 'a bad thing happened today',
+    );
+
+    expect(classifier.calls, 0);
     expect(result.mood, ColorMood.clear);
     expect(result.confidence, 0);
     expect(result.modelVersion, 0);
@@ -98,5 +117,15 @@ class _UnavailableEmotionClassifier implements ContextualEmotionClassifier {
   @override
   Future<List<List<double>>> classify(List<String> texts) {
     throw StateError('Native runtime is unavailable.');
+  }
+}
+
+class _RecordingEmotionClassifier implements ContextualEmotionClassifier {
+  int calls = 0;
+
+  @override
+  Future<List<List<double>>> classify(List<String> texts) async {
+    calls++;
+    throw StateError('The native classifier must remain gated off.');
   }
 }
