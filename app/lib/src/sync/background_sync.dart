@@ -3,12 +3,18 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:workmanager/workmanager.dart';
 
 import '../account/secure_account_store.dart';
 import '../data/local_database.dart';
 import '../notes/notes_repository.dart';
 import '../reminders/reminder_scheduler.dart';
 import 'sync_service.dart';
+
+const backgroundSyncTaskName = 'recall.backgroundSync';
+const _periodicWorkName = 'recall.periodicSync';
+const _oneOffWorkName = 'recall.pendingSync';
+const _workTag = 'recall.sync';
 
 const backgroundSyncIntervals = [
   Duration(minutes: 15),
@@ -168,6 +174,64 @@ abstract class BackgroundWorkScheduler {
   Future<void> cancel();
 }
 
+class WorkmanagerBackgroundWorkScheduler implements BackgroundWorkScheduler {
+  WorkmanagerBackgroundWorkScheduler({Workmanager? workmanager})
+    : _workmanager = workmanager ?? Workmanager();
+
+  final Workmanager _workmanager;
+
+  static final _constraints = Constraints(
+    networkType: NetworkType.connected,
+    requiresStorageNotLow: true,
+  );
+
+  @override
+  Future<void> schedulePeriodic(Duration interval) async {
+    await initializeBackgroundSync();
+    await _workmanager.registerPeriodicTask(
+      _periodicWorkName,
+      backgroundSyncTaskName,
+      frequency: interval,
+      initialDelay: interval,
+      constraints: _constraints,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 15),
+      tag: _workTag,
+    );
+  }
+
+  @override
+  Future<void> enqueueOneOff() async {
+    await initializeBackgroundSync();
+    await _workmanager.registerOneOffTask(
+      _oneOffWorkName,
+      backgroundSyncTaskName,
+      initialDelay: const Duration(seconds: 30),
+      constraints: _constraints,
+      existingWorkPolicy: ExistingWorkPolicy.replace,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(seconds: 30),
+      tag: _workTag,
+    );
+  }
+
+  @override
+  Future<void> cancel() async {
+    await initializeBackgroundSync();
+    await Future.wait([
+      _workmanager.cancelByUniqueName(_periodicWorkName),
+      _workmanager.cancelByUniqueName(_oneOffWorkName),
+    ]);
+  }
+
+  @override
+  Future<void> cancelOneOff() async {
+    await initializeBackgroundSync();
+    await _workmanager.cancelByUniqueName(_oneOffWorkName);
+  }
+}
+
 class DisabledBackgroundWorkScheduler implements BackgroundWorkScheduler {
   const DisabledBackgroundWorkScheduler();
 
@@ -190,7 +254,11 @@ class BackgroundSyncController {
     BackgroundWorkScheduler? scheduler,
     SecureAccountStore? accountStore,
   }) : _settingsStore = settingsStore ?? BackgroundSyncSettingsStore(),
-       _scheduler = scheduler ?? const DisabledBackgroundWorkScheduler(),
+       _scheduler =
+           scheduler ??
+           (Platform.isAndroid
+               ? WorkmanagerBackgroundWorkScheduler()
+               : const DisabledBackgroundWorkScheduler()),
        _accountStore = accountStore ?? SecureAccountStore();
 
   final BackgroundSyncSettingsStore _settingsStore;
@@ -241,6 +309,43 @@ class BackgroundSyncController {
   Future<void> cancel() => _scheduler.cancel();
 
   Future<void> cancelPending() => _scheduler.cancelOneOff();
+}
+
+Future<void>? _backgroundSyncInitialization;
+
+Future<void> initializeBackgroundSync() {
+  if (!Platform.isAndroid) {
+    return Future<void>.value();
+  }
+  final activeInitialization = _backgroundSyncInitialization;
+  if (activeInitialization != null) {
+    return activeInitialization;
+  }
+
+  late final Future<void> guardedInitialization;
+  guardedInitialization = Workmanager()
+      .initialize(backgroundSyncCallbackDispatcher)
+      .onError((Object? error, StackTrace stackTrace) {
+        if (identical(_backgroundSyncInitialization, guardedInitialization)) {
+          _backgroundSyncInitialization = null;
+        }
+        Error.throwWithStackTrace(
+          error ?? StateError('WorkManager initialization failed.'),
+          stackTrace,
+        );
+      });
+  _backgroundSyncInitialization = guardedInitialization;
+  return guardedInitialization;
+}
+
+@pragma('vm:entry-point')
+void backgroundSyncCallbackDispatcher() {
+  Workmanager().executeTask((taskName, _) async {
+    if (taskName != backgroundSyncTaskName) {
+      return true;
+    }
+    return runBackgroundSyncTask();
+  });
 }
 
 @visibleForTesting
@@ -318,6 +423,6 @@ Future<void> _recordBackgroundFailure(
   try {
     await store.recordFailure(DateTime.now(), reason);
   } on Object {
-    // A diagnostic write must not alter the scheduler's retry behavior.
+    // A diagnostic write must not alter WorkManager retry behavior.
   }
 }

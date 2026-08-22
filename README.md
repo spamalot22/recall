@@ -12,8 +12,8 @@ Implemented client features include text notes, checklists, search, pinning,
 archive, trash, Material You theming, locally inferred colour moods with manual
 overrides, recurring reminders, encrypted account setup, password recovery
 keys, automatic sync while the app is active, manual sync, conflict copies, and
-signed in-app APK updates. Native Android background execution is temporarily
-disabled after an Android 16 startup regression.
+signed in-app APK updates. Configurable Android background sync uses WorkManager
+and runs only when an encrypted backup account is connected.
 
 ## Layout
 
@@ -88,7 +88,10 @@ requires HTTPS except for Android-emulator development through `10.0.2.2` or
 
 Sync runs after local changes and whenever the app opens or resumes. Conflicting
 remote content is preserved as a visible `Conflict:` note copy instead of being
-silently overwritten.
+silently overwritten. On Android, users can also enable periodic background sync
+and choose its frequency in Settings. Android controls the exact execution time
+and runs the task only when the device has a network connection and sufficient
+storage.
 
 ## Releases
 

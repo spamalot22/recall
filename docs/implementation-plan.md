@@ -262,8 +262,8 @@ prep still needs broader on-device and multi-device integration testing.
 - Add tombstone sync.
 - Add conflict preservation.
 - Add manual sync trigger in the app.
-- Restore configurable periodic background sync after replacing the Android 16
-  incompatible native worker integration.
+- Configurable periodic background sync using the maintained Android WorkManager
+  integration, with network and storage constraints.
 
 ### Milestone 7: Deployment Hardening
 
