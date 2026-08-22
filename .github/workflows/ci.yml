@@ -32,6 +32,8 @@ jobs:
           npm run build
           npm test
           npm audit --audit-level=moderate
+      - name: Build production server image
+        run: docker build --tag recall-server:ci server
 
   app:
     runs-on: ubuntu-latest
