@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
+import '../network/lan_address.dart';
 import '../security/key_bundles.dart';
 import 'secure_account_store.dart';
 
@@ -367,10 +368,10 @@ class AuthService {
         'Enter a complete backup URL, including https://.',
       );
     }
-    if (uri.scheme != 'https' &&
-        uri.host != '10.0.2.2' &&
-        uri.host != 'localhost') {
-      throw const AccountException('Recall backup must use HTTPS.');
+    if (!isAllowedBackupTransport(uri)) {
+      throw const AccountException(
+        'Use HTTPS, or HTTP with a private numeric LAN address.',
+      );
     }
     return uri.replace(path: '', query: null, fragment: null).toString();
   }

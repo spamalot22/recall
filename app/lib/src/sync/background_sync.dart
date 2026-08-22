@@ -9,6 +9,7 @@ import '../account/secure_account_store.dart';
 import '../data/local_database.dart';
 import '../notes/notes_repository.dart';
 import '../reminders/reminder_scheduler.dart';
+import 'automatic_sync_network_policy.dart';
 import 'sync_service.dart';
 
 const backgroundSyncTaskName = 'recall.backgroundSync';
@@ -181,7 +182,7 @@ class WorkmanagerBackgroundWorkScheduler implements BackgroundWorkScheduler {
   final Workmanager _workmanager;
 
   static final _constraints = Constraints(
-    networkType: NetworkType.connected,
+    networkType: NetworkType.unmetered,
     requiresStorageNotLow: true,
   );
 
@@ -352,18 +353,27 @@ void backgroundSyncCallbackDispatcher() {
 Future<bool> runBackgroundSyncTask({
   BackgroundSyncSettingsStore? settingsStore,
   SecureAccountStore? accountStore,
+  AutomaticSyncNetworkPolicy? networkPolicy,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = settingsStore ?? BackgroundSyncSettingsStore();
   final accounts = accountStore ?? SecureAccountStore();
+  final policy = networkPolicy ?? AutomaticSyncNetworkPolicy();
   late final BackgroundSyncSettings settings;
+  late final StoredSession session;
   try {
     settings = await store.read();
-    if (!settings.enabled || await accounts.readSession() == null) {
+    final storedSession = await accounts.readSession();
+    if (!settings.enabled || storedSession == null) {
       return true;
     }
+    session = storedSession;
   } on Object {
     return false;
+  }
+
+  if (!await policy.shouldAttempt(session.account.serverUrl)) {
+    return true;
   }
 
   try {
@@ -400,13 +410,13 @@ Future<bool> runBackgroundSyncTask({
     return !error.retryable;
   } on SocketException catch (_) {
     await _recordBackgroundFailure(store, 'Network unavailable.');
-    return false;
+    return true;
   } on HttpException catch (_) {
     await _recordBackgroundFailure(store, 'Could not reach Recall backup.');
-    return false;
+    return true;
   } on TimeoutException catch (_) {
     await _recordBackgroundFailure(store, 'Recall backup timed out.');
-    return false;
+    return true;
   } on Object {
     await _recordBackgroundFailure(store, 'Background sync could not finish.');
     return true;

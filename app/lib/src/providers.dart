@@ -8,8 +8,9 @@ import 'notes/mood_analyzer.dart';
 import 'notes/note_models.dart';
 import 'notes/notes_repository.dart';
 import 'reminders/reminder_scheduler.dart';
-import 'sync/sync_service.dart';
+import 'sync/automatic_sync_network_policy.dart';
 import 'sync/background_sync.dart';
+import 'sync/sync_service.dart';
 import 'updates/apk_installer.dart';
 import 'updates/update_service.dart';
 
@@ -63,6 +64,10 @@ final syncServiceProvider = Provider<SyncService>((ref) {
     ref.watch(secureAccountStoreProvider),
   );
 });
+
+final automaticSyncNetworkPolicyProvider = Provider<AutomaticSyncNetworkPolicy>(
+  (ref) => AutomaticSyncNetworkPolicy(),
+);
 
 final backgroundSyncSettingsStoreProvider =
     Provider<BackgroundSyncSettingsStore>((ref) {

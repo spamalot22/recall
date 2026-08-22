@@ -5,22 +5,65 @@ Recall's backend is designed to be private by default and Portainer-friendly.
 ## Default Network Shape
 
 ```text
-Tailscale/localhost -> recall_api -> recall_db
+phone on home LAN -> recall_api -> recall_db
 ```
 
-- `recall_api` binds to `127.0.0.1` on the Docker host.
+- `recall_api` binds to `127.0.0.1` until LAN access is explicitly configured.
 - `recall_db` has no host port.
 - API and database communicate through a private Docker bridge network.
 
-## Tailscale
+## Home LAN Setup
 
-Use Tailscale Serve for private tailnet access:
+Give the home server a DHCP reservation or static address. In Portainer, add the
+following stack environment variables, replacing the example address with that
+fixed LAN address:
 
-```bash
-tailscale serve --bg http://127.0.0.1:8787
+```text
+RECALL_API_BIND_ADDRESS=192.168.1.10
+RECALL_API_PORT=8787
 ```
 
-Treat Tailscale Funnel as an explicit opt-in mode. Before enabling Funnel, confirm:
+Redeploy the stack, then open this URL from the phone while it is connected to
+home Wi-Fi:
+
+```text
+http://192.168.1.10:8787/health
+```
+
+It should return a small JSON health response. In Recall, use
+`http://192.168.1.10:8787` as the Backup URL. Use the numeric address rather
+than a local hostname: HTTP is accepted only for literal private or loopback
+addresses.
+
+Do not forward port `8787` on the router. If the server has a host firewall,
+allow TCP `8787` only from the home LAN subnet. Docker publishes only the API;
+PostgreSQL remains reachable solely from the private Compose network.
+
+### Transport Security
+
+Encrypted note contents remain end-to-end encrypted before they reach the API.
+Login passwords, access tokens, and sync metadata are protected by the home
+network but are not protected from LAN interception when plain HTTP is used.
+Use WPA2/WPA3, do not use this mode on an untrusted/shared LAN, and prefer a
+locally trusted HTTPS reverse proxy if other people or devices on the LAN are
+not trusted. Public addresses and hostnames remain HTTPS-only in the app.
+
+## Battery-Aware Sync
+
+Android background work is constrained to unmetered networking. For a private
+numeric Backup URL, Recall also compares the server address with the phone's
+active local addresses and skips automatic sync unless both are on the same
+IPv4 `/24` or IPv6 `/64` subnet. An unavailable LAN server is not submitted to
+WorkManager for repeated retries; pending encrypted changes remain local until
+the next eligible run.
+
+Manual sync deliberately bypasses this LAN gate so configuration errors can be
+diagnosed from Settings. Android still chooses the exact time for periodic work.
+
+## Internet Exposure
+
+The supplied stack is not intended for direct internet exposure. Before adding
+an HTTPS reverse proxy or tunnel, confirm:
 
 - Public registration is disabled unless intentionally needed.
 - Bootstrap credentials have been rotated or removed.
@@ -34,8 +77,7 @@ Leave it empty unless rate limits need the original Funnel client IP. When it is
 needed, set it to the exact IP or narrow CIDR of the local trusted proxy as seen
 by the API container. Never set it to `true`, `0.0.0.0/0`, or `::/0`.
 
-The app must use the HTTPS URL presented by Tailscale Serve or Funnel. Plain HTTP
-is accepted only for local Android-emulator development.
+Any non-LAN deployment must use a publicly trusted HTTPS URL.
 
 ## Initial Account Setup
 

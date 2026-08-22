@@ -13,8 +13,9 @@ import 'src/notes/notes_repository.dart';
 import 'src/providers.dart';
 import 'src/reminders/reminder_editor.dart';
 import 'src/reminders/reminder_scheduler.dart';
-import 'src/sync/sync_service.dart';
+import 'src/sync/automatic_sync_network_policy.dart';
 import 'src/sync/background_sync.dart';
+import 'src/sync/sync_service.dart';
 import 'src/updates/apk_installer.dart';
 import 'src/updates/update_service.dart';
 
@@ -1179,9 +1180,7 @@ Future<void> _showSettingsSheet(BuildContext context, WidgetRef ref) async {
                     title: const Text('Background sync'),
                     subtitle: Text(
                       backgroundSyncSettings.enabled
-                          ? _backgroundSyncIntervalLabel(
-                              backgroundSyncSettings.interval,
-                            )
+                          ? '${_backgroundSyncIntervalLabel(backgroundSyncSettings.interval)} on Wi-Fi'
                           : 'Off',
                     ),
                     value: backgroundSyncSettings.enabled,
@@ -1459,7 +1458,7 @@ class _AccountPageState extends ConsumerState<AccountPage> {
               enableSuggestions: false,
               decoration: const InputDecoration(
                 labelText: 'Backup URL',
-                hintText: 'https://recall.example.com',
+                hintText: 'http://192.168.1.10:8787',
                 prefixIcon: Icon(Icons.dns_outlined),
               ),
             ),
@@ -1886,6 +1885,13 @@ Future<void> _runSync(BuildContext context, WidgetRef ref) async {
 Future<void> _syncQuietly(WidgetRef ref) async {
   await _enqueueBackgroundSyncQuietly(ref);
   try {
+    final session = await ref.read(storedSessionProvider.future);
+    if (session == null ||
+        !await ref
+            .read(automaticSyncNetworkPolicyProvider)
+            .shouldAttempt(session.account.serverUrl)) {
+      return;
+    }
     final result = await _runTrackedSync(
       ref.read(syncServiceProvider),
       ref.read(backgroundSyncSettingsStoreProvider),
@@ -1926,10 +1932,17 @@ Future<void> _cancelPendingBackgroundSyncQuietly(WidgetRef ref) async {
 
 Future<void> _syncServiceQuietly(
   SyncService service, {
+  required SecureAccountStore accountStore,
+  required AutomaticSyncNetworkPolicy networkPolicy,
   BackgroundSyncController? backgroundSync,
   BackgroundSyncSettingsStore? diagnostics,
 }) async {
   try {
+    final session = await accountStore.readSession();
+    if (session == null ||
+        !await networkPolicy.shouldAttempt(session.account.serverUrl)) {
+      return;
+    }
     final result = diagnostics == null
         ? await service.sync()
         : await _runTrackedSync(service, diagnostics);
@@ -1947,9 +1960,13 @@ Future<void> _syncAndReconcileQuietly(
   ReminderScheduler scheduler,
   BackgroundSyncController backgroundSync,
   BackgroundSyncSettingsStore diagnostics,
+  SecureAccountStore accountStore,
+  AutomaticSyncNetworkPolicy networkPolicy,
 ) async {
   await _syncServiceQuietly(
     syncService,
+    accountStore: accountStore,
+    networkPolicy: networkPolicy,
     backgroundSync: backgroundSync,
     diagnostics: diagnostics,
   );
@@ -3035,6 +3052,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                     await _enqueueBackgroundSyncQuietly(ref);
                     await _syncServiceQuietly(
                       syncService,
+                      accountStore: ref.read(secureAccountStoreProvider),
+                      networkPolicy: ref.read(
+                        automaticSyncNetworkPolicyProvider,
+                      ),
                       backgroundSync: ref.read(
                         backgroundSyncControllerProvider,
                       ),
@@ -3056,6 +3077,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         await _enqueueBackgroundSyncQuietly(ref);
         await _syncServiceQuietly(
           syncService,
+          accountStore: ref.read(secureAccountStoreProvider),
+          networkPolicy: ref.read(automaticSyncNetworkPolicyProvider),
           backgroundSync: ref.read(backgroundSyncControllerProvider),
           diagnostics: ref.read(backgroundSyncSettingsStoreProvider),
         );
@@ -3325,6 +3348,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
               scheduler,
               ref.read(backgroundSyncControllerProvider),
               ref.read(backgroundSyncSettingsStoreProvider),
+              ref.read(secureAccountStoreProvider),
+              ref.read(automaticSyncNetworkPolicyProvider),
             );
           })(),
         );

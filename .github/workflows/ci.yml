@@ -34,6 +34,16 @@ jobs:
           npm audit --audit-level=moderate
       - name: Build production server image
         run: docker build --tag recall-server:ci server
+      - name: Validate LAN Compose stack
+        env:
+          DATABASE_URL: postgres://recall:ci-database-password-1234@recall_db:5432/recall
+          JWT_ACCESS_SECRET: ci-access-secret-with-at-least-thirty-two-characters
+          JWT_REFRESH_SECRET: ci-refresh-secret-with-at-least-thirty-two-characters
+          POSTGRES_DB: recall
+          POSTGRES_PASSWORD: ci-database-password-1234
+          POSTGRES_USER: recall
+          RECALL_API_BIND_ADDRESS: 192.168.1.10
+        run: docker compose config --quiet
 
   app:
     runs-on: ubuntu-latest

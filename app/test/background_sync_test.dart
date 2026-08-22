@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:cryptography/cryptography.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/account/secure_account_store.dart';
 import 'package:recall_app/src/data/local_database.dart';
 import 'package:recall_app/src/notes/notes_repository.dart';
+import 'package:recall_app/src/sync/automatic_sync_network_policy.dart';
 import 'package:recall_app/src/sync/background_sync.dart';
 import 'package:recall_app/src/sync/sync_execution_lock.dart';
 import 'package:recall_app/src/sync/sync_service.dart';
@@ -201,6 +204,26 @@ void main() {
     expect(succeeded, isTrue);
   });
 
+  test(
+    'worker exits without opening the database when away from LAN',
+    () async {
+      final succeeded = await runBackgroundSyncTask(
+        settingsStore: BackgroundSyncSettingsStore(
+          storage: _MemoryBackgroundSyncStorage(),
+        ),
+        accountStore: _FakeAccountStore(
+          connected: true,
+          serverUrl: 'http://192.168.1.10:8787',
+        ),
+        networkPolicy: AutomaticSyncNetworkPolicy(
+          localAddressLoader: () async => [InternetAddress('192.168.50.8')],
+        ),
+      );
+
+      expect(succeeded, isTrue);
+    },
+  );
+
   test('worker requests a retry when secure settings cannot be read', () async {
     final succeeded = await runBackgroundSyncTask(
       settingsStore: BackgroundSyncSettingsStore(
@@ -265,9 +288,13 @@ class _FailingBackgroundSyncStorage implements BackgroundSyncStorage {
 }
 
 class _FakeAccountStore extends SecureAccountStore {
-  _FakeAccountStore({required this.connected});
+  _FakeAccountStore({
+    required this.connected,
+    this.serverUrl = 'https://example.com',
+  });
 
   final bool connected;
+  final String serverUrl;
 
   @override
   Future<StoredSession?> readSession() async {
@@ -275,8 +302,8 @@ class _FakeAccountStore extends SecureAccountStore {
       return null;
     }
     return StoredSession(
-      account: const StoredAccount(
-        serverUrl: 'https://example.com',
+      account: StoredAccount(
+        serverUrl: serverUrl,
         userId: 'user-id',
         email: 'user@example.com',
         deviceId: 'device-id',

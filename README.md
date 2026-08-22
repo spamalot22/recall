@@ -48,7 +48,12 @@ By default, the API binds to localhost only:
 127.0.0.1:8787
 ```
 
-PostgreSQL is not exposed on a host port. For remote access, expose the API through Tailscale Serve first. Tailscale Funnel should be treated as an explicit opt-in deployment mode after hardening and review.
+PostgreSQL is not exposed on a host port. To sync only at home, set
+`RECALL_API_BIND_ADDRESS` to the server's fixed LAN address and connect the app
+to `http://<server-lan-address>:8787`. Recall accepts unencrypted HTTP only for
+numeric private/loopback addresses; internet-facing backup URLs must use HTTPS.
+See [docs/deployment.md](docs/deployment.md) for the Portainer setup and
+security boundary.
 
 ## Flutter Development
 
@@ -90,8 +95,9 @@ Sync runs after local changes and whenever the app opens or resumes. Conflicting
 remote content is preserved as a visible `Conflict:` note copy instead of being
 silently overwritten. On Android, users can also enable periodic background sync
 and choose its frequency in Settings. Android controls the exact execution time
-and runs the task only when the device has a network connection and sufficient
-storage.
+and runs the task only on an unmetered connection with sufficient storage. For a
+private numeric backup address, automatic sync also verifies that the phone and
+server are on the same local subnet before contacting the server.
 
 ## Releases
 

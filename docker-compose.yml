@@ -21,7 +21,7 @@ services:
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
       TRUST_PROXY: ${TRUST_PROXY:-}
     ports:
-      - "127.0.0.1:${RECALL_API_PORT:-8787}:8787"
+      - "${RECALL_API_BIND_ADDRESS:-127.0.0.1}:${RECALL_API_PORT:-8787}:8787"
     read_only: true
     cap_drop:
       - ALL
