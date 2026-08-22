@@ -34,7 +34,7 @@ jobs:
           npm audit --audit-level=moderate
       - name: Build production server image
         run: docker build --tag recall-server:ci server
-      - name: Validate LAN Compose stack
+      - name: Validate pull-only LAN Compose stack
         env:
           DATABASE_URL: postgres://recall:ci-database-password-1234@recall_db:5432/recall
           JWT_ACCESS_SECRET: ci-access-secret-with-at-least-thirty-two-characters
@@ -43,7 +43,17 @@ jobs:
           POSTGRES_PASSWORD: ci-database-password-1234
           POSTGRES_USER: recall
           RECALL_API_BIND_ADDRESS: 192.168.1.10
-        run: docker compose config --quiet
+          TAG: ci
+        run: |
+          docker compose config --quiet
+          docker compose config --format json | node -e '
+            const fs = require("node:fs");
+            const config = JSON.parse(fs.readFileSync(0, "utf8"));
+            const api = config.services.api;
+            if (api.image !== "ghcr.io/spamalot22/recall-server:ci" || api.build) {
+              throw new Error("API must use the expected pull-only GHCR image");
+            }
+          '
 
   app:
     runs-on: ubuntu-latest

@@ -39,8 +39,14 @@ The backend expects PostgreSQL through `DATABASE_URL`.
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
+
+The Portainer stack pulls the published multi-architecture API image from
+`ghcr.io/spamalot22/recall-server`. Set `TAG` to a semantic release such as
+`0.1.21` for a pinned deployment, or leave it as `latest` to follow new
+releases. The home server does not build the API image.
 
 By default, the API binds to localhost only:
 

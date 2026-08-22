@@ -1,8 +1,9 @@
 services:
   api:
     container_name: recall_api
-    build:
-      context: ./server
+    image: ghcr.io/spamalot22/recall-server:${TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       db:
         condition: service_healthy

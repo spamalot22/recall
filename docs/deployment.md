@@ -2,6 +2,21 @@
 
 Recall's backend is designed to be private by default and Portainer-friendly.
 
+The stack pulls the published `ghcr.io/spamalot22/recall-server` image. It does
+not build the Node API on the home server. Release tags publish matching
+`linux/amd64` and `linux/arm64` images and update the `latest` tag.
+
+For reproducible deployments, set this Portainer stack environment variable to
+the release being deployed:
+
+```text
+TAG=0.1.21
+```
+
+Leave `TAG=latest` only when the stack should follow the newest release. After
+changing the tag, use Portainer's image-pull and redeploy controls so the new
+image is fetched before the container is replaced.
+
 ## Default Network Shape
 
 ```text
@@ -123,3 +138,7 @@ The API service is intended to run:
 - with all Linux capabilities dropped
 - with `no-new-privileges`
 - with only `/tmp` writable through tmpfs if needed
+
+The API image is published only after the server build, tests, and dependency
+audit pass. Its runtime remains distroless and non-root. The PostgreSQL image is
+pulled separately and the database is not exposed on a host port.
