@@ -2693,47 +2693,6 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                       AnimatedSize(
                         duration: contentMotion,
                         curve: Curves.easeOutCubic,
-                        alignment: Alignment.topLeft,
-                        child: _reminderAt == null
-                            ? const SizedBox(width: double.infinity)
-                            : Padding(
-                                padding: const EdgeInsets.only(top: 16),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: InputChip(
-                                    avatar: Icon(
-                                      _recurrence == ReminderRecurrence.none
-                                          ? Icons.notifications_none_rounded
-                                          : Icons.event_repeat_rounded,
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      _formatEditorDateTime(
-                                        context,
-                                        _reminderAt!,
-                                      ),
-                                    ),
-                                    onPressed: _editReminder,
-                                    onDeleted: () {
-                                      unawaited(
-                                        HapticFeedback.selectionClick(),
-                                      );
-                                      _updateDraft(() {
-                                        _reminderAt = null;
-                                        _recurrence = ReminderRecurrence.none;
-                                      });
-                                    },
-                                    deleteIcon: const Icon(
-                                      Icons.close_rounded,
-                                      size: 18,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                      ),
-                      AnimatedSize(
-                        duration: contentMotion,
-                        curve: Curves.easeOutCubic,
                         alignment: Alignment.topCenter,
                         child: !_isChecklist
                             ? const SizedBox(width: double.infinity)
@@ -2799,29 +2758,61 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                       child: Row(
                         children: [
                           const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: _reminderAt == null
-                                ? 'Add reminder'
-                                : 'Edit reminder',
-                            onPressed: unavailable ? null : _editReminder,
-                            icon: AnimatedSwitcher(
-                              duration: quickMotion,
-                              transitionBuilder: (child, animation) =>
-                                  ScaleTransition(
-                                    scale: animation,
-                                    child: child,
+                          if (_reminderAt == null)
+                            IconButton(
+                              tooltip: 'Add reminder',
+                              onPressed: unavailable ? null : _editReminder,
+                              icon: const Icon(
+                                Icons.notifications_none_rounded,
+                              ),
+                            )
+                          else ...[
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 2),
+                                child: Tooltip(
+                                  message: 'Edit reminder',
+                                  child: TextButton.icon(
+                                    key: const Key(
+                                      'editor-reminder-timestamp-button',
+                                    ),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: moodColors.accent,
+                                      alignment: Alignment.centerLeft,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    onPressed: unavailable
+                                        ? null
+                                        : _editReminder,
+                                    icon: Icon(
+                                      _recurrence == ReminderRecurrence.none
+                                          ? Icons.notifications_active_rounded
+                                          : Icons.event_repeat_rounded,
+                                      size: 20,
+                                    ),
+                                    label: Text(
+                                      _formatEditorDateTime(
+                                        context,
+                                        _reminderAt!,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
-                              child: Icon(
-                                _reminderAt == null
-                                    ? Icons.notifications_none_rounded
-                                    : Icons.notifications_active_rounded,
-                                key: ValueKey(_reminderAt != null),
-                                color: _reminderAt == null
-                                    ? null
-                                    : moodColors.accent,
+                                ),
                               ),
                             ),
-                          ),
+                            IconButton(
+                              tooltip: 'Remove reminder',
+                              onPressed: unavailable ? null : _removeReminder,
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ],
                           IconButton(
                             tooltip: _isChecklist
                                 ? 'Convert checklist to text'
@@ -2851,7 +2842,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                               color: moodColors.accent,
                             ),
                           ),
-                          const Spacer(),
+                          if (_reminderAt == null) const Spacer(),
                           if (_moodWasPicked)
                             IconButton(
                               tooltip: 'Use automatic colour',
@@ -2962,6 +2953,15 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       _recurrence = selection.at == null
           ? ReminderRecurrence.none
           : selection.recurrence;
+    });
+  }
+
+  void _removeReminder() {
+    FocusScope.of(context).unfocus();
+    unawaited(HapticFeedback.selectionClick());
+    _updateDraft(() {
+      _reminderAt = null;
+      _recurrence = ReminderRecurrence.none;
     });
   }
 

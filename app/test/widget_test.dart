@@ -249,7 +249,31 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Existing reminder'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Edit reminder'));
+
+    final bodyFieldFinder = find.byKey(const Key('note-body-field'));
+    await tester.tap(bodyFieldFinder);
+    await tester.pump();
+    addTearDown(tester.view.resetViewInsets);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 240);
+    await tester.pumpAndSettle();
+
+    final timestampButton = find.byKey(
+      const Key('editor-reminder-timestamp-button'),
+    );
+    expect(timestampButton, findsOneWidget);
+    final scaffold = find.byType(Scaffold);
+    final keyboardTop =
+        tester.getSize(scaffold).height -
+        MediaQuery.viewInsetsOf(tester.element(scaffold)).bottom;
+    final timestampRect = tester.getRect(timestampButton);
+    expect(timestampRect.bottom, lessThanOrEqualTo(keyboardTop));
+    expect(timestampRect.bottom, greaterThan(keyboardTop - 56));
+
+    await tester.tap(timestampButton);
+    await tester.pump();
+    final bodyField = tester.widget<TextField>(bodyFieldFinder);
+    expect(bodyField.focusNode?.hasFocus, isFalse);
+    tester.view.resetViewInsets();
     await tester.pumpAndSettle();
 
     final tomorrowChip = tester.widget<ChoiceChip>(
