@@ -15,6 +15,15 @@ const _snoozeTenMinutesAction = 'snooze_10_minutes';
 const _snoozeOneHourAction = 'snooze_1_hour';
 const _completeAction = 'complete_reminder';
 
+class ReminderPermissionException implements Exception {
+  const ReminderPermissionException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 @pragma('vm:entry-point')
 void reminderNotificationActionBackground(NotificationResponse response) {
   unawaited(_handleReminderNotificationAction(response));
@@ -291,6 +300,7 @@ class ReminderScheduler {
       requestPermissions: requestPermissions,
       requestNotificationsPermission: android.requestNotificationsPermission,
       canScheduleExactNotifications: android.canScheduleExactNotifications,
+      requestExactAlarmsPermission: android.requestExactAlarmsPermission,
     );
   }
 
@@ -410,17 +420,33 @@ Future<AndroidScheduleMode> resolveAndroidReminderScheduleMode({
   required bool requestPermissions,
   required Future<bool?> Function() requestNotificationsPermission,
   required Future<bool?> Function() canScheduleExactNotifications,
+  required Future<bool?> Function() requestExactAlarmsPermission,
 }) async {
   if (requestPermissions) {
     try {
-      await requestNotificationsPermission();
+      final notificationsAllowed = await requestNotificationsPermission();
+      if (notificationsAllowed == false) {
+        throw const ReminderPermissionException(
+          'Notifications are disabled for Recall. Enable them in Android Settings, then reopen Recall to schedule this reminder.',
+        );
+      }
+    } on ReminderPermissionException {
+      rethrow;
     } on Object {
       // Notification permission state must not prevent storing the alarm.
     }
   }
 
   try {
-    return await canScheduleExactNotifications() == true
+    var exactAlarmsAllowed = await canScheduleExactNotifications() == true;
+    if (!exactAlarmsAllowed && requestPermissions) {
+      try {
+        exactAlarmsAllowed = await requestExactAlarmsPermission() == true;
+      } on Object {
+        // The inexact fallback remains available if Settings cannot be opened.
+      }
+    }
+    return exactAlarmsAllowed
         ? AndroidScheduleMode.exactAllowWhileIdle
         : AndroidScheduleMode.inexactAllowWhileIdle;
   } on Object {

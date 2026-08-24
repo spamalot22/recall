@@ -55,28 +55,60 @@ void main() {
       isTrue,
     );
     expect(
-      File(
-        'android/app/src/main/res/raw/keep.xml',
-      ).readAsStringSync(),
+      File('android/app/src/main/res/raw/keep.xml').readAsStringSync(),
       contains('@drawable/$iconName'),
     );
   });
 
   test('uses exact alarms only when capability is already granted', () async {
+    var exactPermissionRequested = false;
     final mode = await resolveAndroidReminderScheduleMode(
       requestPermissions: true,
       requestNotificationsPermission: () async => true,
       canScheduleExactNotifications: () async => true,
+      requestExactAlarmsPermission: () async {
+        exactPermissionRequested = true;
+        return true;
+      },
     );
 
+    expect(exactPermissionRequested, isFalse);
     expect(mode, AndroidScheduleMode.exactAllowWhileIdle);
   });
 
-  test('falls back when exact alarms are unavailable', () async {
+  test('requests exact-alarm access when it is unavailable', () async {
+    var requested = false;
     final mode = await resolveAndroidReminderScheduleMode(
       requestPermissions: true,
       requestNotificationsPermission: () async => true,
       canScheduleExactNotifications: () async => false,
+      requestExactAlarmsPermission: () async {
+        requested = true;
+        return true;
+      },
+    );
+
+    expect(requested, isTrue);
+    expect(mode, AndroidScheduleMode.exactAllowWhileIdle);
+  });
+
+  test('falls back when exact-alarm access is declined', () async {
+    final mode = await resolveAndroidReminderScheduleMode(
+      requestPermissions: true,
+      requestNotificationsPermission: () async => true,
+      canScheduleExactNotifications: () async => false,
+      requestExactAlarmsPermission: () async => false,
+    );
+
+    expect(mode, AndroidScheduleMode.inexactAllowWhileIdle);
+  });
+
+  test('falls back when exact-alarm settings cannot be opened', () async {
+    final mode = await resolveAndroidReminderScheduleMode(
+      requestPermissions: true,
+      requestNotificationsPermission: () async => true,
+      canScheduleExactNotifications: () async => false,
+      requestExactAlarmsPermission: () => throw StateError('unavailable'),
     );
 
     expect(mode, AndroidScheduleMode.inexactAllowWhileIdle);
@@ -87,6 +119,7 @@ void main() {
       requestPermissions: true,
       requestNotificationsPermission: () => throw StateError('unavailable'),
       canScheduleExactNotifications: () => throw StateError('unavailable'),
+      requestExactAlarmsPermission: () => throw StateError('unavailable'),
     );
 
     expect(mode, AndroidScheduleMode.inexactAllowWhileIdle);
@@ -103,10 +136,32 @@ void main() {
           return true;
         },
         canScheduleExactNotifications: () async => false,
+        requestExactAlarmsPermission: () async {
+          requested = true;
+          return true;
+        },
       );
 
       expect(requested, isFalse);
       expect(mode, AndroidScheduleMode.inexactAllowWhileIdle);
     },
   );
+
+  test('reports denied notification permission', () async {
+    expect(
+      () => resolveAndroidReminderScheduleMode(
+        requestPermissions: true,
+        requestNotificationsPermission: () async => false,
+        canScheduleExactNotifications: () async => true,
+        requestExactAlarmsPermission: () async => true,
+      ),
+      throwsA(
+        isA<ReminderPermissionException>().having(
+          (error) => error.message,
+          'message',
+          contains('Notifications are disabled'),
+        ),
+      ),
+    );
+  });
 }

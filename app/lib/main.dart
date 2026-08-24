@@ -3313,7 +3313,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       return;
     }
     setState(() => _saving = true);
-    var reminderProblem = false;
+    String? reminderProblem;
     try {
       final repository = ref.read(notesRepositoryProvider);
       final scheduler = ref.read(reminderSchedulerProvider);
@@ -3333,8 +3333,12 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
           );
         }
         _hadReminder = reminder != null;
+      } on ReminderPermissionException catch (error) {
+        reminderProblem = error.message;
       } on Object {
-        reminderProblem = true;
+        reminderProblem = reminder == null
+            ? 'Note saved, but the old reminder could not be cancelled.'
+            : 'Note saved, but the reminder could not be scheduled.';
       }
       if (mounted) {
         _persistedRevision = _draftRevision;
@@ -3355,18 +3359,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         );
         final messenger = ScaffoldMessenger.of(context);
         Navigator.of(context).pop();
-        if (reminderProblem) {
+        if (reminderProblem != null) {
           messenger
             ..hideCurrentSnackBar()
-            ..showSnackBar(
-              SnackBar(
-                content: Text(
-                  reminder == null
-                      ? 'Note saved, but the old reminder could not be cancelled.'
-                      : 'Note saved, but the reminder could not be scheduled.',
-                ),
-              ),
-            );
+            ..showSnackBar(SnackBar(content: Text(reminderProblem)));
         }
       }
     } on Object {
