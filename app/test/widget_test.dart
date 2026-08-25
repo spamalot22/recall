@@ -335,6 +335,69 @@ void main() {
     expect(find.byTooltip('Use grid layout'), findsOneWidget);
   });
 
+  testWidgets('note cards shrink to content and retain their height cap', (
+    tester,
+  ) async {
+    const shortNote = NotePreview(
+      id: 'short-card',
+      title: '',
+      body: 'One line',
+      mood: ColorMood.clear,
+      reminderLabel: '',
+    );
+    final reminderNote = NotePreview(
+      id: 'reminder-card',
+      title: '',
+      body: 'One line',
+      mood: ColorMood.clear,
+      reminderLabel: 'Tomorrow 9:00 AM',
+      reminderAt: DateTime(2026, 8, 26, 9),
+    );
+    const longNote = NotePreview(
+      id: 'long-card',
+      title: '',
+      body:
+          'Line one\nLine two\nLine three\nLine four\nLine five\n'
+          'Line six\nLine seven\nLine eight\nLine nine',
+      mood: ColorMood.clear,
+      reminderLabel: '',
+    );
+
+    Future<double> cardHeight(
+      NotePreview note, {
+      double maxHeight = 204,
+    }) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 220,
+                  child: NoteCard(note: note, maxHeight: maxHeight),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return tester.getSize(find.byType(NoteCard)).height;
+    }
+
+    final shortHeight = await cardHeight(shortNote);
+    final reminderHeight = await cardHeight(reminderNote);
+    final longHeight = await cardHeight(longNote);
+    final cappedListHeight = await cardHeight(longNote, maxHeight: 176);
+
+    expect(shortHeight, 56);
+    expect(reminderHeight, greaterThan(shortHeight));
+    expect(reminderHeight, lessThan(204));
+    expect(longHeight, lessThanOrEqualTo(204));
+    expect(longHeight, greaterThan(reminderHeight));
+    expect(cappedListHeight, lessThanOrEqualTo(176));
+  });
+
   testWidgets('swiping a note archives it with undo feedback', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);

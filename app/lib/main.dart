@@ -5,6 +5,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 import 'src/account/auth_service.dart';
 import 'src/account/secure_account_store.dart';
@@ -332,19 +333,16 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     : width >= 700
                     ? 3
                     : 2;
-                return SliverGrid.builder(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns,
-                    mainAxisExtent: 204,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                  ),
-                  itemCount: notes.length,
+                return SliverMasonryGrid.count(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childCount: notes.length,
                   itemBuilder: (context, index) => _NoteEntrance(
                     key: ValueKey('grid-${notes[index].id}'),
                     child: _SwipeArchiveNote(
                       note: notes[index],
-                      child: NoteCard(note: notes[index]),
+                      child: NoteCard(note: notes[index], maxHeight: 204),
                     ),
                   ),
                 );
@@ -354,14 +352,11 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
               itemCount: notes.length,
               itemBuilder: (context, index) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: SizedBox(
-                  height: 176,
-                  child: _NoteEntrance(
-                    key: ValueKey('list-${notes[index].id}'),
-                    child: _SwipeArchiveNote(
-                      note: notes[index],
-                      child: NoteCard(note: notes[index]),
-                    ),
+                child: _NoteEntrance(
+                  key: ValueKey('list-${notes[index].id}'),
+                  child: _SwipeArchiveNote(
+                    note: notes[index],
+                    child: NoteCard(note: notes[index], maxHeight: 176),
                   ),
                 ),
               ),
@@ -680,9 +675,10 @@ class _SwipeArchiveNote extends ConsumerWidget {
 }
 
 class NoteCard extends ConsumerStatefulWidget {
-  const NoteCard({super.key, required this.note});
+  const NoteCard({super.key, required this.note, this.maxHeight = 204});
 
   final NotePreview note;
+  final double maxHeight;
 
   @override
   ConsumerState<NoteCard> createState() => _NoteCardState();
@@ -699,161 +695,195 @@ class _NoteCardState extends ConsumerState<NoteCard> {
     final hasTitle = note.title.trim().isNotEmpty;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
-    return AnimatedScale(
-      scale: _pressed ? 0.985 : 1,
-      duration: reduceMotion
-          ? Duration.zero
-          : const Duration(milliseconds: 110),
-      curve: Curves.easeOutCubic,
-      child: Card(
-        color: colors.background,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: colors.outline),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onHighlightChanged: (pressed) {
-            if (_pressed != pressed) {
-              setState(() => _pressed = pressed);
-            }
-          },
-          onTap: () {
-            unawaited(HapticFeedback.selectionClick());
-            unawaited(_openNoteEditor(context, noteId: note.id));
-          },
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: 56, maxHeight: widget.maxHeight),
+      child: AnimatedScale(
+        scale: _pressed ? 0.985 : 1,
+        duration: reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 110),
+        curve: Curves.easeOutCubic,
+        child: Card(
+          color: colors.background,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: colors.outline),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onHighlightChanged: (pressed) {
+              if (_pressed != pressed) {
+                setState(() => _pressed = pressed);
+              }
+            },
+            onTap: () {
+              unawaited(HapticFeedback.selectionClick());
+              unawaited(_openNoteEditor(context, noteId: note.id));
+            },
+            child: Stack(
               children: [
-                Row(
-                  children: [
-                    if (hasTitle)
-                      Expanded(
-                        child: Text(
-                          note.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(
-                                color: colors.foreground,
-                                fontWeight: FontWeight.w800,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (hasTitle) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                note.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(
+                                      color: colors.foreground,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                               ),
+                            ),
+                            if (note.pinned)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 6),
+                                child: Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 16,
+                                  color: colors.accent,
+                                ),
+                              ),
+                            const SizedBox(width: 38),
+                          ],
                         ),
-                      )
-                    else
-                      const Spacer(),
-                    if (note.pinned)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: Icon(
-                          Icons.push_pin_rounded,
-                          size: 16,
-                          color: colors.accent,
+                        const SizedBox(height: 8),
+                      ],
+                      Flexible(
+                        fit: FlexFit.loose,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            right: hasTitle
+                                ? 0
+                                : note.pinned
+                                ? 54
+                                : 34,
+                          ),
+                          child: note.checklistItems.isEmpty
+                              ? Text(
+                                  note.body,
+                                  maxLines: hasTitle ? 7 : 8,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
+                                        color: colors.foreground.withValues(
+                                          alpha: 0.9,
+                                        ),
+                                        fontSize: hasTitle ? null : 16,
+                                        height: 1.35,
+                                      ),
+                                )
+                              : ChecklistPreview(
+                                  noteId: note.id,
+                                  items: note.checklistItems,
+                                  foreground: colors.foreground,
+                                  accent: colors.accent,
+                                ),
                         ),
                       ),
-                    PopupMenuButton<_NoteCardAction>(
-                      tooltip: 'Note actions',
-                      padding: EdgeInsets.zero,
-                      iconSize: 20,
-                      icon: Icon(
-                        Icons.more_vert_rounded,
-                        color: colors.foreground,
-                      ),
-                      onSelected: (action) => _runAction(context, ref, action),
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: _NoteCardAction.pin,
-                          child: _MenuItem(
-                            icon: note.pinned
-                                ? Icons.push_pin_outlined
-                                : Icons.push_pin_rounded,
-                            label: note.pinned ? 'Unpin' : 'Pin',
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: _NoteCardAction.archive,
-                          child: _MenuItem(
-                            icon: note.archived
-                                ? Icons.unarchive_outlined
-                                : Icons.archive_outlined,
-                            label: note.archived ? 'Unarchive' : 'Archive',
-                          ),
-                        ),
-                        const PopupMenuItem(
-                          value: _NoteCardAction.delete,
-                          child: _MenuItem(
-                            icon: Icons.delete_outline_rounded,
-                            label: 'Move to trash',
-                          ),
+                      if (hasReminder || note.checklistItems.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            if (hasReminder) ...[
+                              Icon(
+                                note.recurring
+                                    ? Icons.event_repeat_rounded
+                                    : Icons.notifications_none_rounded,
+                                size: 16,
+                                color: colors.accent,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  note.reminderLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.labelMedium
+                                      ?.copyWith(
+                                        color: colors.foreground.withValues(
+                                          alpha: 0.72,
+                                        ),
+                                      ),
+                                ),
+                              ),
+                            ] else
+                              const Spacer(),
+                            if (note.checklistItems.isNotEmpty)
+                              Text(
+                                '${note.completedChecklistItems}/${note.checklistItems.length}',
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      color: colors.foreground.withValues(
+                                        alpha: 0.72,
+                                      ),
+                                    ),
+                              ),
+                          ],
                         ),
                       ],
-                    ),
-                  ],
-                ),
-                SizedBox(height: hasTitle ? 8 : 2),
-                Expanded(
-                  child: note.checklistItems.isEmpty
-                      ? Text(
-                          note.body,
-                          maxLines: hasTitle ? 5 : 7,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: colors.foreground.withValues(alpha: 0.9),
-                                fontSize: hasTitle ? null : 16,
-                                height: 1.35,
-                              ),
-                        )
-                      : ChecklistPreview(
-                          noteId: note.id,
-                          items: note.checklistItems,
-                          foreground: colors.foreground,
-                          accent: colors.accent,
-                        ),
-                ),
-                if (hasReminder || note.checklistItems.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (hasReminder) ...[
-                        Icon(
-                          note.recurring
-                              ? Icons.event_repeat_rounded
-                              : Icons.notifications_none_rounded,
-                          size: 16,
-                          color: colors.accent,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            note.reminderLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelMedium
-                                ?.copyWith(
-                                  color: colors.foreground.withValues(
-                                    alpha: 0.72,
-                                  ),
-                                ),
-                          ),
-                        ),
-                      ] else
-                        const Spacer(),
-                      if (note.checklistItems.isNotEmpty)
-                        Text(
-                          '${note.completedChecklistItems}/${note.checklistItems.length}',
-                          style: Theme.of(context).textTheme.labelMedium
-                              ?.copyWith(
-                                color: colors.foreground.withValues(
-                                  alpha: 0.72,
-                                ),
-                              ),
-                        ),
                     ],
                   ),
-                ],
+                ),
+                if (!hasTitle && note.pinned)
+                  Positioned(
+                    top: 18,
+                    right: 43,
+                    child: Icon(
+                      Icons.push_pin_rounded,
+                      size: 16,
+                      color: colors.accent,
+                    ),
+                  ),
+                Positioned(
+                  top: 0,
+                  right: 2,
+                  child: PopupMenuButton<_NoteCardAction>(
+                    tooltip: 'Note actions',
+                    padding: EdgeInsets.zero,
+                    iconSize: 20,
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      color: colors.foreground,
+                    ),
+                    onSelected: (action) => _runAction(context, ref, action),
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: _NoteCardAction.pin,
+                        child: _MenuItem(
+                          icon: note.pinned
+                              ? Icons.push_pin_outlined
+                              : Icons.push_pin_rounded,
+                          label: note.pinned ? 'Unpin' : 'Pin',
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: _NoteCardAction.archive,
+                        child: _MenuItem(
+                          icon: note.archived
+                              ? Icons.unarchive_outlined
+                              : Icons.archive_outlined,
+                          label: note.archived ? 'Unarchive' : 'Archive',
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: _NoteCardAction.delete,
+                        child: _MenuItem(
+                          icon: Icons.delete_outline_rounded,
+                          label: 'Move to trash',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
