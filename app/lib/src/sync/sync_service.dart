@@ -683,7 +683,8 @@ class SyncService {
     final content = await _readResponse(response);
     final decoded = content.isEmpty ? null : jsonDecode(content);
     if (response.statusCode == HttpStatus.unauthorized && !retried) {
-      final refreshed = await _refreshSession(session);
+      final refreshed =
+          await _replacementSession(session) ?? await _refreshSession(session);
       return _requestJson(
         session: refreshed,
         method: method,
@@ -714,6 +715,18 @@ class SyncService {
     final response = await request.close();
     final content = await _readResponse(response);
     if (response.statusCode != HttpStatus.ok) {
+      // A foreground and background isolate can discover an expired access
+      // token together. If the other isolate won refresh-token rotation, use
+      // the session it persisted instead of treating this device as signed out.
+      var replacement = await _replacementSession(session);
+      if (replacement == null &&
+          response.statusCode == HttpStatus.unauthorized) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        replacement = await _replacementSession(session);
+      }
+      if (replacement != null) {
+        return replacement;
+      }
       if (response.statusCode == HttpStatus.tooManyRequests ||
           response.statusCode >= 500) {
         throw const SyncException(
@@ -721,9 +734,14 @@ class SyncService {
           retryable: true,
         );
       }
-      throw const SyncException(
-        'Your Recall backup session has expired. Sign in again.',
-      );
+      final error = _responseError(content);
+      if (response.statusCode == HttpStatus.unauthorized &&
+          error == 'invalid_refresh_token') {
+        throw const SyncException(
+          'Your Recall backup session has expired. Sign in again.',
+        );
+      }
+      throw const SyncException('Could not refresh the Recall backup session.');
     }
     final decoded = jsonDecode(content);
     if (decoded is! Map ||
@@ -739,6 +757,33 @@ class SyncService {
     );
     await _accountStore.writeSession(refreshed);
     return refreshed;
+  }
+
+  Future<StoredSession?> _replacementSession(StoredSession attempted) async {
+    final latest = await _accountStore.readSession();
+    if (latest == null ||
+        latest.account.serverUrl != attempted.account.serverUrl ||
+        latest.account.userId != attempted.account.userId ||
+        latest.account.deviceId != attempted.account.deviceId ||
+        (latest.accessToken == attempted.accessToken &&
+            latest.refreshToken == attempted.refreshToken)) {
+      return null;
+    }
+    return latest;
+  }
+
+  String? _responseError(String content) {
+    if (content.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(content);
+      return decoded is Map && decoded['error'] is String
+          ? decoded['error'] as String
+          : null;
+    } on FormatException {
+      return null;
+    }
   }
 
   Future<String> _readResponse(HttpClientResponse response) async {
