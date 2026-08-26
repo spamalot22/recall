@@ -143,8 +143,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            "recall-android-${{ github.ref_name }}.apk" \
-            --repo "${{ github.repository }}" \
-            --title "Recall ${{ github.ref_name }}" \
-            --generate-notes
+          TAG="${{ github.ref_name }}"
+          APK="recall-android-$TAG.apk"
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --repo "${{ github.repository }}" \
+              --title "Recall $TAG" \
+              --generate-notes
+          fi
