@@ -460,12 +460,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final source = tester.getCenter(find.text('Third'));
-    final target = tester.getCenter(find.text('First'));
+    final target = tester.getCenter(find.text('First')) + const Offset(0, 30);
+    final originalOrder = (await repository.watchNotePreviews().first)
+        .map((note) => note.id)
+        .toList();
     final gesture = await tester.startGesture(source);
     await tester.pump(const Duration(milliseconds: 360));
     await gesture.moveTo(target);
-    await tester.pump();
-    await gesture.up();
 
     var animatedTranslation = 0.0;
     for (var frame = 0; frame < 20; frame++) {
@@ -480,11 +481,20 @@ void main() {
       }
     }
     expect(animatedTranslation, greaterThan(1));
+    expect(
+      find.byKey(ValueKey('note-drop-placeholder-$thirdId')),
+      findsOneWidget,
+    );
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      originalOrder,
+    );
     await tester.pump(const Duration(milliseconds: 100));
     expect(
       _largestCardTranslation(tester, [firstId, secondId, thirdId]),
       lessThan(animatedTranslation),
     );
+    await gesture.up();
     await tester.pumpAndSettle();
     expect(
       _largestCardTranslation(tester, [firstId, secondId, thirdId]),
@@ -538,12 +548,14 @@ void main() {
     await tester.pumpAndSettle();
 
     final source = tester.getCenter(find.text('Grid third'));
-    final target = tester.getCenter(find.text('Grid first'));
+    final target =
+        tester.getCenter(find.text('Grid first')) + const Offset(0, 30);
+    final originalOrder = (await repository.watchNotePreviews().first)
+        .map((note) => note.id)
+        .toList();
     final gesture = await tester.startGesture(source);
     await tester.pump(const Duration(milliseconds: 360));
     await gesture.moveTo(target);
-    await tester.pump();
-    await gesture.up();
 
     var animatedTranslation = 0.0;
     for (var frame = 0; frame < 20; frame++) {
@@ -558,6 +570,11 @@ void main() {
       }
     }
     expect(animatedTranslation, greaterThan(1));
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      originalOrder,
+    );
+    await gesture.up();
     await tester.pumpAndSettle();
     expect(
       _largestCardTranslation(tester, [firstId, secondId, thirdId]),
@@ -567,6 +584,135 @@ void main() {
       (await repository.watchNotePreviews().first).map((note) => note.id),
       [secondId, firstId, thirdId],
     );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('a card can be dropped into empty space before the first card', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    final firstId = await repository.createTextNote(title: 'First', body: '');
+    final secondId = await repository.createTextNote(title: 'Second', body: '');
+    final thirdId = await repository.createTextNote(title: 'Third', body: '');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Use list layout'));
+    await tester.pumpAndSettle();
+
+    final firstCard = find.byKey(ValueKey('note-position-$thirdId'));
+    final leadingSpace = Offset(
+      tester.getCenter(firstCard).dx,
+      tester.getTopLeft(firstCard).dy - 6,
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('First')),
+    );
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(leadingSpace);
+
+    var animatedTranslation = 0.0;
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+      animatedTranslation = _largestCardTranslation(tester, [
+        firstId,
+        secondId,
+        thirdId,
+      ]);
+      if (animatedTranslation > 1) {
+        break;
+      }
+    }
+    expect(animatedTranslation, greaterThan(1));
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [firstId, thirdId, secondId],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('cancelling a live card reorder restores the saved order', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    await repository.createTextNote(title: 'First', body: '');
+    await repository.createTextNote(title: 'Second', body: '');
+    await repository.createTextNote(title: 'Third', body: '');
+    final originalOrder = (await repository.watchNotePreviews().first)
+        .map((note) => note.id)
+        .toList();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Use list layout'));
+    await tester.pumpAndSettle();
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('First')),
+    );
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(
+      tester.getCenter(find.text('Third')) + const Offset(0, 30),
+    );
+    var animatedTranslation = 0.0;
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+      animatedTranslation = _largestCardTranslation(tester, originalOrder);
+      if (animatedTranslation > 1) {
+        break;
+      }
+    }
+    expect(animatedTranslation, greaterThan(1));
+
+    await gesture.cancel();
+    await tester.pumpAndSettle();
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      originalOrder,
+    );
+    expect(_largestCardTranslation(tester, originalOrder), closeTo(0, 0.01));
+    expect(find.text('Move to trash'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
@@ -612,7 +758,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final source = tester.getCenter(find.text('Visible third'));
-    final target = tester.getCenter(find.text('Visible first'));
+    final target =
+        tester.getCenter(find.text('Visible first')) + const Offset(0, 30);
     final gesture = await tester.startGesture(source);
     await tester.pump(const Duration(milliseconds: 360));
     await gesture.moveTo(target);

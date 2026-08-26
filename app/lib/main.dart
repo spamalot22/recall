@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
@@ -140,13 +141,19 @@ class RecallHomePage extends ConsumerStatefulWidget {
 class _RecallHomePageState extends ConsumerState<RecallHomePage>
     with WidgetsBindingObserver {
   final _searchController = TextEditingController();
+  final _notesScrollController = ScrollController();
   StreamSubscription<String>? _notificationOpenSubscription;
   bool _startupUpdateCheckStarted = false;
   bool _gridLayout = true;
   _NoteFilter _filter = _NoteFilter.all;
   final Map<String, Offset> _notePositions = {};
+  final Map<String, Rect> _noteRects = {};
   Map<String, Offset> _reorderStartPositions = const {};
   int _reorderAnimationGeneration = 0;
+  String? _draggedNoteId;
+  List<String>? _dragOrderIds;
+  List<String>? _dragOriginalOrderIds;
+  Set<String> _dragVisibleIds = const {};
 
   @override
   void initState() {
@@ -175,6 +182,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     _searchController
       ..removeListener(_onSearchChanged)
       ..dispose();
+    _notesScrollController.dispose();
     super.dispose();
   }
 
@@ -250,31 +258,47 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         ],
       ),
       body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 2, 16, 14),
-              sliver: SliverToBoxAdapter(
-                child: _HomeControls(
-                  controller: _searchController,
-                  filter: _filter,
-                  gridLayout: _gridLayout,
-                  onFilterChanged: (filter) => setState(() => _filter = filter),
-                  onLayoutChanged: (gridLayout) =>
-                      setState(() => _gridLayout = gridLayout),
+        child: DragTarget<String>(
+          onWillAcceptWithDetails: (details) =>
+              notes.asData?.value.any((note) => note.id == details.data) ??
+              false,
+          onAcceptWithDetails: (details) {
+            final allNotes = notes.asData?.value;
+            if (allNotes != null) {
+              unawaited(_commitNoteDrag(details.data, allNotes));
+            }
+          },
+          builder: (context, candidates, rejected) => CustomScrollView(
+            controller: _notesScrollController,
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 14),
+                sliver: SliverToBoxAdapter(
+                  child: _HomeControls(
+                    controller: _searchController,
+                    filter: _filter,
+                    gridLayout: _gridLayout,
+                    onFilterChanged: (filter) =>
+                        setState(() => _filter = filter),
+                    onLayoutChanged: (gridLayout) =>
+                        setState(() => _gridLayout = gridLayout),
+                  ),
                 ),
               ),
-            ),
-            notes.when(
-              data: (items) =>
-                  _notesSliver(_visibleNotes(items), allNotes: items),
-              error: (error, _) => SliverFillRemaining(
-                hasScrollBody: false,
-                child: ErrorState(message: error.toString()),
+              notes.when(
+                data: (items) {
+                  final visibleNotes = _visibleNotes(items);
+                  return _notesSliver(_applyDragOrder(visibleNotes));
+                },
+                error: (error, _) => SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: ErrorState(message: error.toString()),
+                ),
+                loading: () =>
+                    const SliverFillRemaining(child: _LoadingNotes()),
               ),
-              loading: () => const SliverFillRemaining(child: _LoadingNotes()),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -315,10 +339,20 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     }).toList();
   }
 
-  Widget _notesSliver(
-    List<NotePreview> notes, {
-    required List<NotePreview> allNotes,
-  }) {
+  List<NotePreview> _applyDragOrder(List<NotePreview> notes) {
+    final orderIds = _dragOrderIds;
+    if (orderIds == null || orderIds.length != notes.length) {
+      return notes;
+    }
+    final notesById = {for (final note in notes) note.id: note};
+    if (notesById.length != orderIds.length ||
+        orderIds.any((id) => !notesById.containsKey(id))) {
+      return notes;
+    }
+    return [for (final id in orderIds) notesById[id]!];
+  }
+
+  Widget _notesSliver(List<NotePreview> notes) {
     if (notes.isEmpty) {
       return SliverFillRemaining(
         hasScrollBody: false,
@@ -329,14 +363,6 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       );
     }
 
-    final pinnedIds = {
-      for (final note in notes)
-        if (note.pinned) note.id,
-    };
-    final unpinnedIds = {
-      for (final note in notes)
-        if (!note.pinned) note.id,
-    };
     final noteIndices = {
       for (var index = 0; index < notes.length; index++) notes[index].id: index,
     };
@@ -367,19 +393,16 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                         noteId: notes[index].id,
                         generation: _reorderAnimationGeneration,
                         animateFrom: _reorderStartPositions[notes[index].id],
-                        onPositionChanged: _recordNotePosition,
+                        onLayoutChanged: _recordNoteLayout,
                         child: _ReorderableNote(
                           note: notes[index],
                           maxHeight: 204,
-                          reorderGroupIds: notes[index].pinned
-                              ? pinnedIds
-                              : unpinnedIds,
-                          onReorder: (sourceId, targetId) => _reorderNotes(
-                            notes,
-                            allNotes,
-                            sourceId,
-                            targetId,
-                          ),
+                          onDragStarted: () =>
+                              _startNoteDrag(notes[index].id, notes),
+                          onDragUpdate: (position) =>
+                              _updateNoteDrag(notes[index].id, position, notes),
+                          onDragCancelled: () =>
+                              _cancelNoteDrag(notes[index].id),
                         ),
                       ),
                     ),
@@ -400,15 +423,15 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     noteId: notes[index].id,
                     generation: _reorderAnimationGeneration,
                     animateFrom: _reorderStartPositions[notes[index].id],
-                    onPositionChanged: _recordNotePosition,
+                    onLayoutChanged: _recordNoteLayout,
                     child: _ReorderableNote(
                       note: notes[index],
                       maxHeight: 176,
-                      reorderGroupIds: notes[index].pinned
-                          ? pinnedIds
-                          : unpinnedIds,
-                      onReorder: (sourceId, targetId) =>
-                          _reorderNotes(notes, allNotes, sourceId, targetId),
+                      onDragStarted: () =>
+                          _startNoteDrag(notes[index].id, notes),
+                      onDragUpdate: (position) =>
+                          _updateNoteDrag(notes[index].id, position, notes),
+                      onDragCancelled: () => _cancelNoteDrag(notes[index].id),
                     ),
                   ),
                 ),
@@ -417,51 +440,194 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     );
   }
 
-  Future<void> _reorderNotes(
-    List<NotePreview> visibleNotes,
-    List<NotePreview> allNotes,
-    String sourceId,
-    String targetId,
-  ) async {
-    final sourceIndex = visibleNotes.indexWhere((note) => note.id == sourceId);
-    final targetIndex = visibleNotes.indexWhere((note) => note.id == targetId);
-    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex == targetIndex) {
+  void _startNoteDrag(String sourceId, List<NotePreview> visibleNotes) {
+    if (_draggedNoteId != null) {
       return;
     }
-    if (visibleNotes[sourceIndex].pinned != visibleNotes[targetIndex].pinned) {
+    final orderIds = visibleNotes.map((note) => note.id).toList();
+    setState(() {
+      _draggedNoteId = sourceId;
+      _dragOrderIds = orderIds;
+      _dragOriginalOrderIds = List.of(orderIds);
+      _dragVisibleIds = orderIds.toSet();
+    });
+  }
+
+  void _updateNoteDrag(
+    String sourceId,
+    Offset globalPosition,
+    List<NotePreview> visibleNotes,
+  ) {
+    final orderIds = _dragOrderIds;
+    if (_draggedNoteId != sourceId || orderIds == null) {
+      return;
+    }
+    final notesById = {for (final note in visibleNotes) note.id: note};
+    final source = notesById[sourceId];
+    if (source == null) {
       return;
     }
 
-    final reorderedVisible = [...visibleNotes];
-    final source = reorderedVisible.removeAt(sourceIndex);
-    reorderedVisible.insert(targetIndex, source);
-    final visibleIds = visibleNotes.map((note) => note.id).toSet();
-    var visibleIndex = 0;
-    final reordered = [
-      for (final note in allNotes)
-        if (visibleIds.contains(note.id))
-          reorderedVisible[visibleIndex++]
-        else
-          note,
-    ];
+    final groupIds = orderIds
+        .where((id) => id != sourceId && notesById[id]?.pinned == source.pinned)
+        .toList();
+    final measuredGroupIds = groupIds
+        .where((id) => _noteRects.containsKey(id))
+        .toList();
+    if (measuredGroupIds.isEmpty) {
+      return;
+    }
+
+    final scrollOffset = _notesScrollController.hasClients
+        ? _notesScrollController.offset
+        : 0.0;
+    final pointer = globalPosition + Offset(0, scrollOffset);
+    final firstGroupId = groupIds.first;
+    final lastGroupId = groupIds.last;
+    final top = measuredGroupIds
+        .map((id) => _noteRects[id]!.top)
+        .reduce(math.min);
+    final bottom = measuredGroupIds
+        .map((id) => _noteRects[id]!.bottom)
+        .reduce(math.max);
+
+    late final String targetId;
+    late final bool placeAfter;
+    if (pointer.dy <= top) {
+      targetId = firstGroupId;
+      placeAfter = false;
+    } else if (pointer.dy >= bottom) {
+      targetId = lastGroupId;
+      placeAfter = true;
+    } else {
+      targetId = measuredGroupIds.reduce((closestId, candidateId) {
+        final closestDistance = _distanceSquaredToRect(
+          pointer,
+          _noteRects[closestId]!,
+        );
+        final candidateDistance = _distanceSquaredToRect(
+          pointer,
+          _noteRects[candidateId]!,
+        );
+        return candidateDistance < closestDistance ? candidateId : closestId;
+      });
+      final targetRect = _noteRects[targetId]!;
+      final verticalDifference = pointer.dy - targetRect.center.dy;
+      placeAfter = verticalDifference.abs() > targetRect.height * 0.16
+          ? verticalDifference > 0
+          : pointer.dx > targetRect.center.dx;
+    }
+
+    final reordered = List<String>.of(orderIds)..remove(sourceId);
+    final targetIndex = reordered.indexOf(targetId);
+    if (targetIndex < 0) {
+      return;
+    }
+    reordered.insert(targetIndex + (placeAfter ? 1 : 0), sourceId);
+    if (_sameOrder(reordered, orderIds)) {
+      return;
+    }
+
     _reorderStartPositions = Map.of(_notePositions);
     _reorderAnimationGeneration++;
+    setState(() => _dragOrderIds = reordered);
+  }
+
+  Future<void> _commitNoteDrag(
+    String sourceId,
+    List<NotePreview> allNotes,
+  ) async {
+    final orderIds = _dragOrderIds;
+    final originalOrderIds = _dragOriginalOrderIds;
+    if (_draggedNoteId != sourceId ||
+        orderIds == null ||
+        originalOrderIds == null) {
+      return;
+    }
+    if (_sameOrder(orderIds, originalOrderIds)) {
+      _clearNoteDrag();
+      return;
+    }
+
+    var visibleIndex = 0;
+    final reorderedIds = [
+      for (final note in allNotes)
+        if (_dragVisibleIds.contains(note.id))
+          orderIds[visibleIndex++]
+        else
+          note.id,
+    ];
+    if (visibleIndex != orderIds.length) {
+      _cancelNoteDrag(sourceId);
+      return;
+    }
+
     try {
-      await ref
-          .read(notesRepositoryProvider)
-          .reorderNotes(reordered.map((note) => note.id).toList());
+      await ref.read(notesRepositoryProvider).reorderNotes(reorderedIds);
+      if (mounted && _draggedNoteId == sourceId) {
+        _clearNoteDrag();
+      }
       unawaited(HapticFeedback.mediumImpact());
       unawaited(_syncQuietly(ref));
     } on Object {
-      if (mounted) {
+      if (mounted && _draggedNoteId == sourceId) {
+        _cancelNoteDrag(sourceId);
         _showSnackBar(context, 'Could not reorder these notes.');
       }
     }
   }
 
-  void _recordNotePosition(String noteId, Offset position) {
-    _notePositions[noteId] = position;
+  void _cancelNoteDrag(String sourceId) {
+    if (_draggedNoteId != sourceId) {
+      return;
+    }
+    _reorderStartPositions = Map.of(_notePositions);
+    _reorderAnimationGeneration++;
+    _clearNoteDrag();
   }
+
+  void _clearNoteDrag() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _draggedNoteId = null;
+      _dragOrderIds = null;
+      _dragOriginalOrderIds = null;
+      _dragVisibleIds = const {};
+    });
+  }
+
+  void _recordNoteLayout(String noteId, Offset position, Size size) {
+    _notePositions[noteId] = position;
+    _noteRects[noteId] = position & size;
+  }
+}
+
+bool _sameOrder(List<String> first, List<String> second) {
+  if (first.length != second.length) {
+    return false;
+  }
+  for (var index = 0; index < first.length; index++) {
+    if (first[index] != second[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+double _distanceSquaredToRect(Offset point, Rect rect) {
+  final dx = point.dx < rect.left
+      ? rect.left - point.dx
+      : point.dx > rect.right
+      ? point.dx - rect.right
+      : 0.0;
+  final dy = point.dy < rect.top
+      ? rect.top - point.dy
+      : point.dy > rect.bottom
+      ? point.dy - rect.bottom
+      : 0.0;
+  return dx * dx + dy * dy;
 }
 
 class _HomeControls extends StatelessWidget {
@@ -698,14 +864,15 @@ class _NotePositionTransition extends StatefulWidget {
     required this.noteId,
     required this.generation,
     required this.animateFrom,
-    required this.onPositionChanged,
+    required this.onLayoutChanged,
     required this.child,
   });
 
   final String noteId;
   final int generation;
   final Offset? animateFrom;
-  final void Function(String noteId, Offset position) onPositionChanged;
+  final void Function(String noteId, Offset position, Size size)
+  onLayoutChanged;
   final Widget child;
 
   @override
@@ -798,7 +965,7 @@ class _NotePositionTransitionState extends State<_NotePositionTransition>
       final contentPosition = position?.axis == Axis.vertical
           ? globalPosition + Offset(0, position!.pixels)
           : globalPosition;
-      widget.onPositionChanged(widget.noteId, contentPosition);
+      widget.onLayoutChanged(widget.noteId, contentPosition, renderObject.size);
 
       final pendingStart = _pendingStart;
       _pendingStart = null;
@@ -846,14 +1013,16 @@ class _ReorderableNote extends ConsumerStatefulWidget {
   const _ReorderableNote({
     required this.note,
     required this.maxHeight,
-    required this.reorderGroupIds,
-    required this.onReorder,
+    required this.onDragStarted,
+    required this.onDragUpdate,
+    required this.onDragCancelled,
   });
 
   final NotePreview note;
   final double maxHeight;
-  final Set<String> reorderGroupIds;
-  final Future<void> Function(String sourceId, String targetId) onReorder;
+  final VoidCallback onDragStarted;
+  final ValueChanged<Offset> onDragUpdate;
+  final VoidCallback onDragCancelled;
 
   @override
   ConsumerState<_ReorderableNote> createState() => _ReorderableNoteState();
@@ -892,70 +1061,90 @@ class _ReorderableNoteState extends ConsumerState<_ReorderableNote> {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width - 32;
-        return DragTarget<String>(
-          onWillAcceptWithDetails: (details) =>
-              details.data != note.id &&
-              widget.reorderGroupIds.contains(details.data),
-          onAcceptWithDetails: (details) {
-            unawaited(widget.onReorder(details.data, note.id));
+        return Semantics(
+          onLongPress: () {
+            unawaited(_showNoteCardActions(context, ref, note));
           },
-          builder: (context, candidates, rejected) {
-            final targeted = candidates.isNotEmpty;
-            return AnimatedScale(
-              scale: targeted ? 0.97 : 1,
-              duration: MediaQuery.disableAnimationsOf(context)
-                  ? Duration.zero
-                  : const Duration(milliseconds: 120),
-              curve: Curves.easeOutCubic,
-              child: Semantics(
-                onLongPress: () {
-                  unawaited(_showNoteCardActions(context, ref, note));
-                },
-                child: LongPressDraggable<String>(
-                  data: note.id,
-                  delay: const Duration(milliseconds: 320),
-                  hapticFeedbackOnStart: true,
-                  onDragStarted: () => _dragDistance = 0,
-                  onDragUpdate: (details) {
-                    _dragDistance += details.delta.distance;
-                    _autoScroller?.startAutoScrollIfNecessary(
-                      Rect.fromCenter(
-                        center: details.globalPosition,
-                        width: 48,
-                        height: 96,
-                      ),
-                    );
-                  },
-                  onDragEnd: (details) {
-                    _autoScroller?.stopAutoScroll();
-                    if (!details.wasAccepted && _dragDistance < 12 && mounted) {
-                      unawaited(_showNoteCardActions(context, ref, note));
-                    }
-                  },
-                  feedback: Material(
-                    type: MaterialType.transparency,
-                    child: SizedBox(
-                      width: width,
-                      child: Transform.scale(
-                        scale: 1.02,
-                        child: Opacity(
-                          opacity: 0.92,
-                          child: NoteCard(
-                            note: note,
-                            maxHeight: widget.maxHeight,
-                          ),
-                        ),
-                      ),
-                    ),
+          child: LongPressDraggable<String>(
+            data: note.id,
+            delay: const Duration(milliseconds: 320),
+            hapticFeedbackOnStart: true,
+            onDragStarted: () {
+              _dragDistance = 0;
+              widget.onDragStarted();
+            },
+            onDragUpdate: (details) {
+              _dragDistance += details.delta.distance;
+              widget.onDragUpdate(details.globalPosition);
+              _autoScroller?.startAutoScrollIfNecessary(
+                Rect.fromCenter(
+                  center: details.globalPosition,
+                  width: 48,
+                  height: 96,
+                ),
+              );
+            },
+            onDragEnd: (details) {
+              _autoScroller?.stopAutoScroll();
+              if (!details.wasAccepted) {
+                widget.onDragCancelled();
+              }
+              if (_dragDistance < 12 && mounted) {
+                unawaited(_showNoteCardActions(context, ref, note));
+              }
+            },
+            feedback: Material(
+              type: MaterialType.transparency,
+              child: SizedBox(
+                width: width,
+                child: Transform.scale(
+                  scale: 1.02,
+                  child: Opacity(
+                    opacity: 0.92,
+                    child: NoteCard(note: note, maxHeight: widget.maxHeight),
                   ),
-                  childWhenDragging: Opacity(opacity: 0.2, child: card),
-                  child: card,
                 ),
               ),
-            );
-          },
+            ),
+            childWhenDragging: _NoteDropPlaceholder(
+              key: ValueKey('note-drop-placeholder-${note.id}'),
+              child: card,
+            ),
+            child: card,
+          ),
         );
       },
+    );
+  }
+}
+
+class _NoteDropPlaceholder extends StatelessWidget {
+  const _NoteDropPlaceholder({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Stack(
+      fit: StackFit.passthrough,
+      children: [
+        Opacity(opacity: 0, child: child),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.primaryContainer.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: colors.primary.withValues(alpha: 0.62),
+                  width: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
