@@ -315,6 +315,7 @@ class SyncService {
             'moodModelVersion': note.moodModelVersion,
             'isPinned': note.isPinned,
             'isArchived': note.isArchived,
+            'sortOrder': note.sortOrder,
             'trashedAt': note.trashedAt?.toUtc().toIso8601String(),
             'createdAt': note.createdAt.toUtc().toIso8601String(),
             'updatedAt': note.updatedAt.toUtc().toIso8601String(),
@@ -537,6 +538,7 @@ class SyncService {
         isArchived: Value(
           conflictCopy ? false : _requiredBool(note, 'isArchived'),
         ),
+        sortOrder: Value(_optionalInt(note, 'sortOrder', fallback: 0)),
         trashedAt: Value(conflictCopy ? null : _dateOrNull(note['trashedAt'])),
         updatedAt: Value(_requiredDate(note, 'updatedAt')),
       );
@@ -563,6 +565,7 @@ class SyncService {
                 isArchived: Value(
                   conflictCopy ? false : _requiredBool(note, 'isArchived'),
                 ),
+                sortOrder: Value(_optionalInt(note, 'sortOrder', fallback: 0)),
                 trashedAt: Value(
                   conflictCopy ? null : _dateOrNull(note['trashedAt']),
                 ),

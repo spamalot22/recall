@@ -128,6 +128,18 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   static const VerificationMeta _trashedAtMeta = const VerificationMeta(
     'trashedAt',
   );
@@ -173,6 +185,7 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
     moodModelVersion,
     isPinned,
     isArchived,
+    sortOrder,
     trashedAt,
     createdAt,
     updatedAt,
@@ -257,6 +270,12 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
         isArchived.isAcceptableOrUnknown(data['is_archived']!, _isArchivedMeta),
       );
     }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
     if (data.containsKey('trashed_at')) {
       context.handle(
         _trashedAtMeta,
@@ -328,6 +347,10 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, Note> {
         DriftSqlType.bool,
         data['${effectivePrefix}is_archived'],
       )!,
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
       trashedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}trashed_at'],
@@ -360,6 +383,7 @@ class Note extends DataClass implements Insertable<Note> {
   final int moodModelVersion;
   final bool isPinned;
   final bool isArchived;
+  final int sortOrder;
   final DateTime? trashedAt;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -374,6 +398,7 @@ class Note extends DataClass implements Insertable<Note> {
     required this.moodModelVersion,
     required this.isPinned,
     required this.isArchived,
+    required this.sortOrder,
     this.trashedAt,
     required this.createdAt,
     required this.updatedAt,
@@ -391,6 +416,7 @@ class Note extends DataClass implements Insertable<Note> {
     map['mood_model_version'] = Variable<int>(moodModelVersion);
     map['is_pinned'] = Variable<bool>(isPinned);
     map['is_archived'] = Variable<bool>(isArchived);
+    map['sort_order'] = Variable<int>(sortOrder);
     if (!nullToAbsent || trashedAt != null) {
       map['trashed_at'] = Variable<DateTime>(trashedAt);
     }
@@ -411,6 +437,7 @@ class Note extends DataClass implements Insertable<Note> {
       moodModelVersion: Value(moodModelVersion),
       isPinned: Value(isPinned),
       isArchived: Value(isArchived),
+      sortOrder: Value(sortOrder),
       trashedAt: trashedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(trashedAt),
@@ -435,6 +462,7 @@ class Note extends DataClass implements Insertable<Note> {
       moodModelVersion: serializer.fromJson<int>(json['moodModelVersion']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       isArchived: serializer.fromJson<bool>(json['isArchived']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
       trashedAt: serializer.fromJson<DateTime?>(json['trashedAt']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -454,6 +482,7 @@ class Note extends DataClass implements Insertable<Note> {
       'moodModelVersion': serializer.toJson<int>(moodModelVersion),
       'isPinned': serializer.toJson<bool>(isPinned),
       'isArchived': serializer.toJson<bool>(isArchived),
+      'sortOrder': serializer.toJson<int>(sortOrder),
       'trashedAt': serializer.toJson<DateTime?>(trashedAt),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -471,6 +500,7 @@ class Note extends DataClass implements Insertable<Note> {
     int? moodModelVersion,
     bool? isPinned,
     bool? isArchived,
+    int? sortOrder,
     Value<DateTime?> trashedAt = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -485,6 +515,7 @@ class Note extends DataClass implements Insertable<Note> {
     moodModelVersion: moodModelVersion ?? this.moodModelVersion,
     isPinned: isPinned ?? this.isPinned,
     isArchived: isArchived ?? this.isArchived,
+    sortOrder: sortOrder ?? this.sortOrder,
     trashedAt: trashedAt.present ? trashedAt.value : this.trashedAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -509,6 +540,7 @@ class Note extends DataClass implements Insertable<Note> {
       isArchived: data.isArchived.present
           ? data.isArchived.value
           : this.isArchived,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
       trashedAt: data.trashedAt.present ? data.trashedAt.value : this.trashedAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -528,6 +560,7 @@ class Note extends DataClass implements Insertable<Note> {
           ..write('moodModelVersion: $moodModelVersion, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
+          ..write('sortOrder: $sortOrder, ')
           ..write('trashedAt: $trashedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
@@ -547,6 +580,7 @@ class Note extends DataClass implements Insertable<Note> {
     moodModelVersion,
     isPinned,
     isArchived,
+    sortOrder,
     trashedAt,
     createdAt,
     updatedAt,
@@ -565,6 +599,7 @@ class Note extends DataClass implements Insertable<Note> {
           other.moodModelVersion == this.moodModelVersion &&
           other.isPinned == this.isPinned &&
           other.isArchived == this.isArchived &&
+          other.sortOrder == this.sortOrder &&
           other.trashedAt == this.trashedAt &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
@@ -581,6 +616,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
   final Value<int> moodModelVersion;
   final Value<bool> isPinned;
   final Value<bool> isArchived;
+  final Value<int> sortOrder;
   final Value<DateTime?> trashedAt;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
@@ -596,6 +632,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.moodModelVersion = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
+    this.sortOrder = const Value.absent(),
     this.trashedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -612,6 +649,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     this.moodModelVersion = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.isArchived = const Value.absent(),
+    this.sortOrder = const Value.absent(),
     this.trashedAt = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
@@ -630,6 +668,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Expression<int>? moodModelVersion,
     Expression<bool>? isPinned,
     Expression<bool>? isArchived,
+    Expression<int>? sortOrder,
     Expression<DateTime>? trashedAt,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
@@ -646,6 +685,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
       if (moodModelVersion != null) 'mood_model_version': moodModelVersion,
       if (isPinned != null) 'is_pinned': isPinned,
       if (isArchived != null) 'is_archived': isArchived,
+      if (sortOrder != null) 'sort_order': sortOrder,
       if (trashedAt != null) 'trashed_at': trashedAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -664,6 +704,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
     Value<int>? moodModelVersion,
     Value<bool>? isPinned,
     Value<bool>? isArchived,
+    Value<int>? sortOrder,
     Value<DateTime?>? trashedAt,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
@@ -680,6 +721,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
       moodModelVersion: moodModelVersion ?? this.moodModelVersion,
       isPinned: isPinned ?? this.isPinned,
       isArchived: isArchived ?? this.isArchived,
+      sortOrder: sortOrder ?? this.sortOrder,
       trashedAt: trashedAt ?? this.trashedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -720,6 +762,9 @@ class NotesCompanion extends UpdateCompanion<Note> {
     if (isArchived.present) {
       map['is_archived'] = Variable<bool>(isArchived.value);
     }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
     if (trashedAt.present) {
       map['trashed_at'] = Variable<DateTime>(trashedAt.value);
     }
@@ -748,6 +793,7 @@ class NotesCompanion extends UpdateCompanion<Note> {
           ..write('moodModelVersion: $moodModelVersion, ')
           ..write('isPinned: $isPinned, ')
           ..write('isArchived: $isArchived, ')
+          ..write('sortOrder: $sortOrder, ')
           ..write('trashedAt: $trashedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -3182,6 +3228,7 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<int> moodModelVersion,
       Value<bool> isPinned,
       Value<bool> isArchived,
+      Value<int> sortOrder,
       Value<DateTime?> trashedAt,
       required DateTime createdAt,
       required DateTime updatedAt,
@@ -3199,6 +3246,7 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<int> moodModelVersion,
       Value<bool> isPinned,
       Value<bool> isArchived,
+      Value<int> sortOrder,
       Value<DateTime?> trashedAt,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
@@ -3302,6 +3350,11 @@ class $$NotesTableFilterComposer
 
   ColumnFilters<bool> get isArchived => $composableBuilder(
     column: $table.isArchived,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3430,6 +3483,11 @@ class $$NotesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get trashedAt => $composableBuilder(
     column: $table.trashedAt,
     builder: (column) => ColumnOrderings(column),
@@ -3492,6 +3550,9 @@ class $$NotesTableAnnotationComposer
     column: $table.isArchived,
     builder: (column) => column,
   );
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
 
   GeneratedColumn<DateTime> get trashedAt =>
       $composableBuilder(column: $table.trashedAt, builder: (column) => column);
@@ -3591,6 +3652,7 @@ class $$NotesTableTableManager
                 Value<int> moodModelVersion = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -3606,6 +3668,7 @@ class $$NotesTableTableManager
                 moodModelVersion: moodModelVersion,
                 isPinned: isPinned,
                 isArchived: isArchived,
+                sortOrder: sortOrder,
                 trashedAt: trashedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -3623,6 +3686,7 @@ class $$NotesTableTableManager
                 Value<int> moodModelVersion = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<bool> isArchived = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
                 Value<DateTime?> trashedAt = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
@@ -3638,6 +3702,7 @@ class $$NotesTableTableManager
                 moodModelVersion: moodModelVersion,
                 isPinned: isPinned,
                 isArchived: isArchived,
+                sortOrder: sortOrder,
                 trashedAt: trashedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

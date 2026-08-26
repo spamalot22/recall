@@ -322,6 +322,15 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       );
     }
 
+    final pinnedIds = {
+      for (final note in notes)
+        if (note.pinned) note.id,
+    };
+    final unpinnedIds = {
+      for (final note in notes)
+        if (!note.pinned) note.id,
+    };
+
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
       sliver: _gridLayout
@@ -340,9 +349,14 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                   childCount: notes.length,
                   itemBuilder: (context, index) => _NoteEntrance(
                     key: ValueKey('grid-${notes[index].id}'),
-                    child: _SwipeArchiveNote(
+                    child: _ReorderableNote(
                       note: notes[index],
-                      child: NoteCard(note: notes[index], maxHeight: 204),
+                      maxHeight: 204,
+                      reorderGroupIds: notes[index].pinned
+                          ? pinnedIds
+                          : unpinnedIds,
+                      onReorder: (sourceId, targetId) =>
+                          _reorderNotes(notes, sourceId, targetId),
                     ),
                   ),
                 );
@@ -354,14 +368,49 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _NoteEntrance(
                   key: ValueKey('list-${notes[index].id}'),
-                  child: _SwipeArchiveNote(
+                  child: _ReorderableNote(
                     note: notes[index],
-                    child: NoteCard(note: notes[index], maxHeight: 176),
+                    maxHeight: 176,
+                    reorderGroupIds: notes[index].pinned
+                        ? pinnedIds
+                        : unpinnedIds,
+                    onReorder: (sourceId, targetId) =>
+                        _reorderNotes(notes, sourceId, targetId),
                   ),
                 ),
               ),
             ),
     );
+  }
+
+  Future<void> _reorderNotes(
+    List<NotePreview> visibleNotes,
+    String sourceId,
+    String targetId,
+  ) async {
+    final sourceIndex = visibleNotes.indexWhere((note) => note.id == sourceId);
+    final targetIndex = visibleNotes.indexWhere((note) => note.id == targetId);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex == targetIndex) {
+      return;
+    }
+    if (visibleNotes[sourceIndex].pinned != visibleNotes[targetIndex].pinned) {
+      return;
+    }
+
+    final reordered = [...visibleNotes];
+    final source = reordered.removeAt(sourceIndex);
+    reordered.insert(targetIndex, source);
+    try {
+      await ref
+          .read(notesRepositoryProvider)
+          .reorderNotes(reordered.map((note) => note.id).toList());
+      unawaited(HapticFeedback.mediumImpact());
+      unawaited(_syncQuietly(ref));
+    } on Object {
+      if (mounted) {
+        _showSnackBar(context, 'Could not reorder these notes.');
+      }
+    }
   }
 }
 
@@ -616,6 +665,94 @@ class ErrorState extends StatelessWidget {
 
 enum _NoteCardAction { pin, archive, delete }
 
+class _ReorderableNote extends ConsumerStatefulWidget {
+  const _ReorderableNote({
+    required this.note,
+    required this.maxHeight,
+    required this.reorderGroupIds,
+    required this.onReorder,
+  });
+
+  final NotePreview note;
+  final double maxHeight;
+  final Set<String> reorderGroupIds;
+  final Future<void> Function(String sourceId, String targetId) onReorder;
+
+  @override
+  ConsumerState<_ReorderableNote> createState() => _ReorderableNoteState();
+}
+
+class _ReorderableNoteState extends ConsumerState<_ReorderableNote> {
+  double _dragDistance = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final note = widget.note;
+    final card = _SwipeArchiveNote(
+      note: note,
+      child: NoteCard(note: note, maxHeight: widget.maxHeight),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width - 32;
+        return DragTarget<String>(
+          onWillAcceptWithDetails: (details) =>
+              details.data != note.id &&
+              widget.reorderGroupIds.contains(details.data),
+          onAcceptWithDetails: (details) {
+            unawaited(widget.onReorder(details.data, note.id));
+          },
+          builder: (context, candidates, rejected) {
+            final targeted = candidates.isNotEmpty;
+            return AnimatedScale(
+              scale: targeted ? 0.97 : 1,
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 120),
+              curve: Curves.easeOutCubic,
+              child: LongPressDraggable<String>(
+                data: note.id,
+                delay: const Duration(milliseconds: 320),
+                hapticFeedbackOnStart: true,
+                onDragStarted: () => _dragDistance = 0,
+                onDragUpdate: (details) {
+                  _dragDistance += details.delta.distance;
+                },
+                onDragEnd: (details) {
+                  if (!details.wasAccepted && _dragDistance < 12 && mounted) {
+                    unawaited(_showNoteCardActions(context, ref, note));
+                  }
+                },
+                feedback: Material(
+                  type: MaterialType.transparency,
+                  child: SizedBox(
+                    width: width,
+                    child: Transform.scale(
+                      scale: 1.02,
+                      child: Opacity(
+                        opacity: 0.92,
+                        child: NoteCard(
+                          note: note,
+                          maxHeight: widget.maxHeight,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                childWhenDragging: Opacity(opacity: 0.2, child: card),
+                child: card,
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class _SwipeArchiveNote extends ConsumerWidget {
   const _SwipeArchiveNote({required this.note, required this.child});
 
@@ -752,7 +889,6 @@ class _NoteCardState extends ConsumerState<NoteCard> {
                                   color: colors.accent,
                                 ),
                               ),
-                            const SizedBox(width: 38),
                           ],
                         ),
                         const SizedBox(height: 8),
@@ -761,11 +897,7 @@ class _NoteCardState extends ConsumerState<NoteCard> {
                         fit: FlexFit.loose,
                         child: Padding(
                           padding: EdgeInsets.only(
-                            right: hasTitle
-                                ? 0
-                                : note.pinned
-                                ? 54
-                                : 34,
+                            right: !hasTitle && note.pinned ? 22 : 0,
                           ),
                           child: note.checklistItems.isEmpty
                               ? Text(
@@ -835,55 +967,14 @@ class _NoteCardState extends ConsumerState<NoteCard> {
                 ),
                 if (!hasTitle && note.pinned)
                   Positioned(
-                    top: 18,
-                    right: 43,
+                    top: 16,
+                    right: 14,
                     child: Icon(
                       Icons.push_pin_rounded,
                       size: 16,
                       color: colors.accent,
                     ),
                   ),
-                Positioned(
-                  top: 0,
-                  right: 2,
-                  child: PopupMenuButton<_NoteCardAction>(
-                    tooltip: 'Note actions',
-                    padding: EdgeInsets.zero,
-                    iconSize: 20,
-                    icon: Icon(
-                      Icons.more_vert_rounded,
-                      color: colors.foreground,
-                    ),
-                    onSelected: (action) => _runAction(context, ref, action),
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: _NoteCardAction.pin,
-                        child: _MenuItem(
-                          icon: note.pinned
-                              ? Icons.push_pin_outlined
-                              : Icons.push_pin_rounded,
-                          label: note.pinned ? 'Unpin' : 'Pin',
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _NoteCardAction.archive,
-                        child: _MenuItem(
-                          icon: note.archived
-                              ? Icons.unarchive_outlined
-                              : Icons.archive_outlined,
-                          label: note.archived ? 'Unarchive' : 'Archive',
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: _NoteCardAction.delete,
-                        child: _MenuItem(
-                          icon: Icons.delete_outline_rounded,
-                          label: 'Move to trash',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -891,13 +982,47 @@ class _NoteCardState extends ConsumerState<NoteCard> {
       ),
     );
   }
+}
 
-  Future<void> _runAction(
-    BuildContext context,
-    WidgetRef ref,
-    _NoteCardAction action,
-  ) async {
-    final note = widget.note;
+Future<void> _showNoteCardActions(
+  BuildContext context,
+  WidgetRef ref,
+  NotePreview note,
+) async {
+  final action = await showModalBottomSheet<_NoteCardAction>(
+    context: context,
+    useSafeArea: true,
+    builder: (context) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          leading: Icon(
+            note.pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+          ),
+          title: Text(note.pinned ? 'Unpin' : 'Pin'),
+          onTap: () => Navigator.pop(context, _NoteCardAction.pin),
+        ),
+        ListTile(
+          leading: Icon(
+            note.archived ? Icons.unarchive_outlined : Icons.archive_outlined,
+          ),
+          title: Text(note.archived ? 'Unarchive' : 'Archive'),
+          onTap: () => Navigator.pop(context, _NoteCardAction.archive),
+        ),
+        ListTile(
+          leading: const Icon(Icons.delete_outline_rounded),
+          title: const Text('Move to trash'),
+          onTap: () => Navigator.pop(context, _NoteCardAction.delete),
+        ),
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+  if (action == null || !context.mounted) {
+    return;
+  }
+
+  try {
     final repository = ref.read(notesRepositoryProvider);
     switch (action) {
       case _NoteCardAction.pin:
@@ -920,6 +1045,10 @@ class _NoteCardState extends ConsumerState<NoteCard> {
         );
       case _NoteCardAction.delete:
         await _confirmMoveNoteToTrash(context, ref, note);
+    }
+  } on Object {
+    if (context.mounted) {
+      _showSnackBar(context, 'Could not update this note.');
     }
   }
 }

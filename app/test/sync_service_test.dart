@@ -2,14 +2,82 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/account/secure_account_store.dart';
 import 'package:recall_app/src/data/local_database.dart';
+import 'package:recall_app/src/security/record_cipher.dart';
 import 'package:recall_app/src/sync/sync_execution_lock.dart';
 import 'package:recall_app/src/sync/sync_service.dart';
 
 void main() {
+  test('sync includes manual card order inside encrypted note data', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final serverUrl = 'http://${server.address.address}:${server.port}';
+    final session = _session(serverUrl, 'access', 'refresh');
+    final accountStore = _MemoryAccountStore(session);
+    String? encryptedPayload;
+
+    server.listen((request) async {
+      final body = jsonDecode(await utf8.decoder.bind(request).join());
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/sync/push') {
+        final records = (body as Map<String, Object?>)['records'] as List;
+        final record = Map<String, Object?>.from(records.single as Map);
+        encryptedPayload = record['encryptedPayload'] as String;
+        request.response.write(
+          jsonEncode({
+            'accepted': [
+              {
+                'clientRecordId': record['id'],
+                'serverRevision': 1,
+                'conflict': false,
+              },
+            ],
+          }),
+        );
+      } else {
+        request.response.write(
+          jsonEncode({
+            'records': <Object?>[],
+            'cursor': {'lastServerRevision': 1, 'hasMore': false},
+          }),
+        );
+      }
+      await request.response.close();
+    });
+
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final now = DateTime.utc(2026, 8, 26, 10);
+    await database
+        .into(database.notes)
+        .insert(
+          NotesCompanion.insert(
+            id: '0198a3b4-8e80-7000-8000-000000000001',
+            title: const Value('Private note'),
+            sortOrder: const Value(7),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+    await SyncService(
+      database,
+      accountStore,
+      executionLock: const _ImmediateSyncExecutionLock(),
+    ).sync();
+
+    final payload = await RecordCipher().decryptJson(
+      encryptedValue: encryptedPayload!,
+      masterKey: session.masterKey,
+    );
+    final note = Map<String, Object?>.from(payload['note']! as Map);
+    expect(note['sortOrder'], 7);
+  });
+
   test(
     'sync recovers when another isolate rotated the refresh token',
     () async {

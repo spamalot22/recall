@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/data/local_database.dart';
 
 void main() {
-  test('schema 3 migration preserves schema 2 notes', () async {
+  test('schema 4 migration preserves schema 2 notes', () async {
     final directory = Directory.systemTemp.createTempSync(
       'recall-migration-test-',
     );
@@ -33,6 +33,9 @@ void main() {
       await schemaTwo.customStatement(
         'ALTER TABLE notes DROP COLUMN mood_model_version',
       );
+      await schemaTwo.customStatement(
+        'ALTER TABLE notes DROP COLUMN sort_order',
+      );
       await schemaTwo.customStatement('PRAGMA user_version = 2');
       await schemaTwo.close();
 
@@ -44,10 +47,11 @@ void main() {
         expect(note.mood, 'focus');
         expect(note.moodConfidence, 0);
         expect(note.moodModelVersion, 0);
+        expect(note.sortOrder, 0);
         final version = await upgraded
             .customSelect('PRAGMA user_version')
             .getSingle();
-        expect(version.read<int>('user_version'), 3);
+        expect(version.read<int>('user_version'), 4);
       } finally {
         await upgraded.close();
       }

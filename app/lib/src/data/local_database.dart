@@ -21,6 +21,7 @@ class Notes extends Table {
   IntColumn get moodModelVersion => integer().withDefault(const Constant(0))();
   BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
   BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
   DateTimeColumn get trashedAt => dateTime().nullable()();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime()();
@@ -104,7 +105,7 @@ class LocalDatabase extends _$LocalDatabase {
   LocalDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -116,6 +117,9 @@ class LocalDatabase extends _$LocalDatabase {
       if (from < 3) {
         await migrator.addColumn(notes, notes.moodConfidence);
         await migrator.addColumn(notes, notes.moodModelVersion);
+      }
+      if (from < 4) {
+        await migrator.addColumn(notes, notes.sortOrder);
       }
     },
   );

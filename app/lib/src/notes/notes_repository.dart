@@ -20,6 +20,7 @@ class NotesRepository {
       ..orderBy([
         (note) =>
             OrderingTerm(expression: note.isPinned, mode: OrderingMode.desc),
+        (note) => OrderingTerm(expression: note.sortOrder),
         (note) =>
             OrderingTerm(expression: note.updatedAt, mode: OrderingMode.desc),
       ]);
@@ -83,6 +84,15 @@ class NotesRepository {
         : null;
 
     await _db.transaction(() async {
+      final firstInGroup =
+          await (_db.select(_db.notes)
+                ..where(
+                  (note) =>
+                      note.trashedAt.isNull() & note.isPinned.equals(pinned),
+                )
+                ..orderBy([(note) => OrderingTerm(expression: note.sortOrder)])
+                ..limit(1))
+              .getSingleOrNull();
       await _db
           .into(_db.notes)
           .insert(
@@ -96,6 +106,7 @@ class NotesRepository {
               moodConfidence: Value(analysis?.confidence ?? 1),
               moodModelVersion: Value(analysis?.modelVersion ?? 0),
               isPinned: Value(pinned),
+              sortOrder: Value((firstInGroup?.sortOrder ?? 1) - 1),
               createdAt: now,
               updatedAt: now,
             ),
@@ -197,7 +208,52 @@ class NotesRepository {
   }
 
   Future<void> setPinned(String noteId, bool pinned) async {
-    await _updateNote(noteId, NotesCompanion(isPinned: Value(pinned)));
+    final now = DateTime.now().toUtc();
+    await _db.transaction(() async {
+      final firstInGroup =
+          await (_db.select(_db.notes)
+                ..where(
+                  (note) =>
+                      note.trashedAt.isNull() & note.isPinned.equals(pinned),
+                )
+                ..orderBy([(note) => OrderingTerm(expression: note.sortOrder)])
+                ..limit(1))
+              .getSingleOrNull();
+      await (_db.update(
+        _db.notes,
+      )..where((note) => note.id.equals(noteId))).write(
+        NotesCompanion(
+          isPinned: Value(pinned),
+          sortOrder: Value((firstInGroup?.sortOrder ?? 1) - 1),
+          updatedAt: Value(now),
+        ),
+      );
+    });
+  }
+
+  Future<void> reorderNotes(List<String> orderedIds) async {
+    final uniqueIds = orderedIds.toSet();
+    if (uniqueIds.length != orderedIds.length) {
+      throw ArgumentError.value(
+        orderedIds,
+        'orderedIds',
+        'contains duplicates',
+      );
+    }
+    if (orderedIds.length < 2) {
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    await _db.transaction(() async {
+      for (var index = 0; index < orderedIds.length; index++) {
+        await (_db.update(
+          _db.notes,
+        )..where((note) => note.id.equals(orderedIds[index]))).write(
+          NotesCompanion(sortOrder: Value(index), updatedAt: Value(now)),
+        );
+      }
+    });
   }
 
   Future<void> setArchived(String noteId, bool archived) async {

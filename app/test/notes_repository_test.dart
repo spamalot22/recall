@@ -50,6 +50,30 @@ void main() {
     expect(preview.single.mood, ColorMood.clear);
   });
 
+  test('persists manual note order without edits moving cards', () async {
+    final firstId = await repository.createTextNote(title: 'First', body: '');
+    final secondId = await repository.createTextNote(title: 'Second', body: '');
+    final thirdId = await repository.createTextNote(title: 'Third', body: '');
+
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [thirdId, secondId, firstId],
+    );
+
+    await repository.reorderNotes([secondId, firstId, thirdId]);
+    await repository.updateTextNote(
+      id: firstId,
+      title: 'First edited',
+      body: '',
+      pinned: false,
+    );
+
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [secondId, firstId, thirdId],
+    );
+  });
+
   test(
     'keeps titles optional and automatic moods responsive to edits',
     () async {

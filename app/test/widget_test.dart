@@ -398,6 +398,78 @@ void main() {
     expect(cappedListHeight, lessThanOrEqualTo(176));
   });
 
+  testWidgets('holding a card opens actions without an overflow button', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          notePreviewsProvider.overrideWith((ref) => Stream.value(sampleNotes)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    await tester.longPress(find.text('Monthly filter order'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ListTile, 'Unpin'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Archive'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Move to trash'), findsOneWidget);
+  });
+
+  testWidgets('holding and dragging a card persists its new position', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    final firstId = await repository.createTextNote(title: 'First', body: '');
+    final secondId = await repository.createTextNote(title: 'Second', body: '');
+    final thirdId = await repository.createTextNote(title: 'Third', body: '');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Use list layout'));
+    await tester.pumpAndSettle();
+
+    final source = tester.getCenter(find.text('Third'));
+    final target = tester.getCenter(find.text('First'));
+    final gesture = await tester.startGesture(source);
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(target);
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [secondId, firstId, thirdId],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
   testWidgets('swiping a note archives it with undo feedback', (tester) async {
     final database = LocalDatabase.forTesting(NativeDatabase.memory());
     addTearDown(database.close);
