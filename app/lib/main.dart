@@ -144,6 +144,9 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   bool _startupUpdateCheckStarted = false;
   bool _gridLayout = true;
   _NoteFilter _filter = _NoteFilter.all;
+  final Map<String, Offset> _notePositions = {};
+  Map<String, Offset> _reorderStartPositions = const {};
+  int _reorderAnimationGeneration = 0;
 
   @override
   void initState() {
@@ -334,6 +337,11 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       for (final note in notes)
         if (!note.pinned) note.id,
     };
+    final noteIndices = {
+      for (var index = 0; index < notes.length; index++) notes[index].id: index,
+    };
+    int? findNoteIndex(Key key) =>
+        key is ValueKey<String> ? noteIndices[key.value] : null;
 
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
@@ -346,40 +354,62 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     : width >= 700
                     ? 3
                     : 2;
-                return SliverMasonryGrid.count(
-                  crossAxisCount: columns,
+                return SliverMasonryGrid(
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  childCount: notes.length,
-                  itemBuilder: (context, index) => _NoteEntrance(
-                    key: ValueKey('grid-${notes[index].id}'),
-                    child: _ReorderableNote(
-                      note: notes[index],
-                      maxHeight: 204,
-                      reorderGroupIds: notes[index].pinned
-                          ? pinnedIds
-                          : unpinnedIds,
-                      onReorder: (sourceId, targetId) =>
-                          _reorderNotes(notes, allNotes, sourceId, targetId),
+                  gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _NoteEntrance(
+                      key: ValueKey(notes[index].id),
+                      child: _NotePositionTransition(
+                        noteId: notes[index].id,
+                        generation: _reorderAnimationGeneration,
+                        animateFrom: _reorderStartPositions[notes[index].id],
+                        onPositionChanged: _recordNotePosition,
+                        child: _ReorderableNote(
+                          note: notes[index],
+                          maxHeight: 204,
+                          reorderGroupIds: notes[index].pinned
+                              ? pinnedIds
+                              : unpinnedIds,
+                          onReorder: (sourceId, targetId) => _reorderNotes(
+                            notes,
+                            allNotes,
+                            sourceId,
+                            targetId,
+                          ),
+                        ),
+                      ),
                     ),
+                    childCount: notes.length,
+                    findChildIndexCallback: findNoteIndex,
                   ),
                 );
               },
             )
           : SliverList.builder(
               itemCount: notes.length,
+              findChildIndexCallback: findNoteIndex,
               itemBuilder: (context, index) => Padding(
+                key: ValueKey(notes[index].id),
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _NoteEntrance(
-                  key: ValueKey('list-${notes[index].id}'),
-                  child: _ReorderableNote(
-                    note: notes[index],
-                    maxHeight: 176,
-                    reorderGroupIds: notes[index].pinned
-                        ? pinnedIds
-                        : unpinnedIds,
-                    onReorder: (sourceId, targetId) =>
-                        _reorderNotes(notes, allNotes, sourceId, targetId),
+                  child: _NotePositionTransition(
+                    noteId: notes[index].id,
+                    generation: _reorderAnimationGeneration,
+                    animateFrom: _reorderStartPositions[notes[index].id],
+                    onPositionChanged: _recordNotePosition,
+                    child: _ReorderableNote(
+                      note: notes[index],
+                      maxHeight: 176,
+                      reorderGroupIds: notes[index].pinned
+                          ? pinnedIds
+                          : unpinnedIds,
+                      onReorder: (sourceId, targetId) =>
+                          _reorderNotes(notes, allNotes, sourceId, targetId),
+                    ),
                   ),
                 ),
               ),
@@ -414,6 +444,8 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         else
           note,
     ];
+    _reorderStartPositions = Map.of(_notePositions);
+    _reorderAnimationGeneration++;
     try {
       await ref
           .read(notesRepositoryProvider)
@@ -425,6 +457,10 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         _showSnackBar(context, 'Could not reorder these notes.');
       }
     }
+  }
+
+  void _recordNotePosition(String noteId, Offset position) {
+    _notePositions[noteId] = position;
   }
 }
 
@@ -654,6 +690,133 @@ class _NoteEntrance extends StatelessWidget {
       ),
       child: child,
     );
+  }
+}
+
+class _NotePositionTransition extends StatefulWidget {
+  const _NotePositionTransition({
+    required this.noteId,
+    required this.generation,
+    required this.animateFrom,
+    required this.onPositionChanged,
+    required this.child,
+  });
+
+  final String noteId;
+  final int generation;
+  final Offset? animateFrom;
+  final void Function(String noteId, Offset position) onPositionChanged;
+  final Widget child;
+
+  @override
+  State<_NotePositionTransition> createState() =>
+      _NotePositionTransitionState();
+}
+
+class _NotePositionTransitionState extends State<_NotePositionTransition>
+    with SingleTickerProviderStateMixin {
+  final _layoutKey = GlobalKey();
+  late final AnimationController _controller;
+  late int _handledGeneration;
+  Offset _beginOffset = Offset.zero;
+  Offset? _pendingStart;
+  bool _hideUntilMeasured = false;
+  bool _measurementScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _handledGeneration = widget.generation;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+      value: 1,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _NotePositionTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.generation == _handledGeneration) {
+      return;
+    }
+    _handledGeneration = widget.generation;
+    _controller.stop();
+    _pendingStart = widget.animateFrom;
+    _hideUntilMeasured = _pendingStart != null;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _schedulePositionMeasurement();
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return SizedBox(
+      key: _layoutKey,
+      child: AnimatedBuilder(
+        animation: _controller,
+        child: widget.child,
+        builder: (context, child) {
+          final progress = reduceMotion
+              ? 1.0
+              : Curves.easeOutCubic.transform(_controller.value);
+          return Opacity(
+            opacity: _hideUntilMeasured ? 0 : 1,
+            child: Transform.translate(
+              key: ValueKey('note-position-${widget.noteId}'),
+              offset: Offset.lerp(_beginOffset, Offset.zero, progress)!,
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _schedulePositionMeasurement() {
+    if (_measurementScheduled) {
+      return;
+    }
+    _measurementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measurementScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      final renderObject = _layoutKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.attached) {
+        return;
+      }
+      final globalPosition = renderObject.localToGlobal(Offset.zero);
+      final scrollable = Scrollable.maybeOf(_layoutKey.currentContext!);
+      final position = scrollable?.position;
+      final contentPosition = position?.axis == Axis.vertical
+          ? globalPosition + Offset(0, position!.pixels)
+          : globalPosition;
+      widget.onPositionChanged(widget.noteId, contentPosition);
+
+      final pendingStart = _pendingStart;
+      _pendingStart = null;
+      if (pendingStart == null) {
+        return;
+      }
+      final displacement = pendingStart - contentPosition;
+      final reduceMotion = MediaQuery.disableAnimationsOf(context);
+      setState(() {
+        _beginOffset = reduceMotion ? Offset.zero : displacement;
+        _hideUntilMeasured = false;
+      });
+      if (reduceMotion || displacement.distanceSquared < 1) {
+        _controller.value = 1;
+      } else {
+        _controller.forward(from: 0);
+      }
+    });
   }
 }
 

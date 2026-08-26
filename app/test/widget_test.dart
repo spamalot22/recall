@@ -466,8 +466,103 @@ void main() {
     await gesture.moveTo(target);
     await tester.pump();
     await gesture.up();
+
+    var animatedTranslation = 0.0;
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+      animatedTranslation = _largestCardTranslation(tester, [
+        firstId,
+        secondId,
+        thirdId,
+      ]);
+      if (animatedTranslation > 1) {
+        break;
+      }
+    }
+    expect(animatedTranslation, greaterThan(1));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      _largestCardTranslation(tester, [firstId, secondId, thirdId]),
+      lessThan(animatedTranslation),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      _largestCardTranslation(tester, [firstId, secondId, thirdId]),
+      closeTo(0, 0.01),
+    );
+
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [secondId, firstId, thirdId],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('grid cards animate into their reordered positions', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    final firstId = await repository.createTextNote(
+      title: 'Grid first',
+      body: '',
+    );
+    final secondId = await repository.createTextNote(
+      title: 'Grid second',
+      body: '',
+    );
+    final thirdId = await repository.createTextNote(
+      title: 'Grid third',
+      body: '',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
     await tester.pumpAndSettle();
 
+    final source = tester.getCenter(find.text('Grid third'));
+    final target = tester.getCenter(find.text('Grid first'));
+    final gesture = await tester.startGesture(source);
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(target);
+    await tester.pump();
+    await gesture.up();
+
+    var animatedTranslation = 0.0;
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+      animatedTranslation = _largestCardTranslation(tester, [
+        firstId,
+        secondId,
+        thirdId,
+      ]);
+      if (animatedTranslation > 1) {
+        break;
+      }
+    }
+    expect(animatedTranslation, greaterThan(1));
+    await tester.pumpAndSettle();
+    expect(
+      _largestCardTranslation(tester, [firstId, secondId, thirdId]),
+      closeTo(0, 0.01),
+    );
     expect(
       (await repository.watchNotePreviews().first).map((note) => note.id),
       [secondId, firstId, thirdId],
@@ -1242,6 +1337,18 @@ void main() {
     expect(find.text('Last attempt'), findsOneWidget);
     expect(find.text('2 waiting to sync'), findsOneWidget);
   });
+}
+
+double _largestCardTranslation(WidgetTester tester, Iterable<String> noteIds) {
+  return noteIds
+      .map((id) {
+        final translation = tester
+            .widget<Transform>(find.byKey(ValueKey('note-position-$id')))
+            .transform
+            .getTranslation();
+        return translation.x.abs() + translation.y.abs();
+      })
+      .reduce((largest, value) => value > largest ? value : largest);
 }
 
 class _NoUpdateService extends UpdateService {
