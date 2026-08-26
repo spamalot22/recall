@@ -74,6 +74,35 @@ void main() {
     );
   });
 
+  test('moving a note between pin groups places it first', () async {
+    final firstPinnedId = await repository.createTextNote(
+      title: 'First pinned',
+      body: '',
+      pinned: true,
+    );
+    final secondPinnedId = await repository.createTextNote(
+      title: 'Second pinned',
+      body: '',
+      pinned: true,
+    );
+    final unpinnedId = await repository.createTextNote(
+      title: 'Move me',
+      body: '',
+    );
+
+    await repository.updateTextNote(
+      id: unpinnedId,
+      title: 'Move me',
+      body: '',
+      pinned: true,
+    );
+
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [unpinnedId, secondPinnedId, firstPinnedId],
+    );
+  });
+
   test(
     'keeps titles optional and automatic moods responsive to edits',
     () async {

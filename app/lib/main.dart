@@ -263,7 +263,8 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
               ),
             ),
             notes.when(
-              data: (items) => _notesSliver(_visibleNotes(items)),
+              data: (items) =>
+                  _notesSliver(_visibleNotes(items), allNotes: items),
               error: (error, _) => SliverFillRemaining(
                 hasScrollBody: false,
                 child: ErrorState(message: error.toString()),
@@ -311,7 +312,10 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     }).toList();
   }
 
-  Widget _notesSliver(List<NotePreview> notes) {
+  Widget _notesSliver(
+    List<NotePreview> notes, {
+    required List<NotePreview> allNotes,
+  }) {
     if (notes.isEmpty) {
       return SliverFillRemaining(
         hasScrollBody: false,
@@ -356,7 +360,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                           ? pinnedIds
                           : unpinnedIds,
                       onReorder: (sourceId, targetId) =>
-                          _reorderNotes(notes, sourceId, targetId),
+                          _reorderNotes(notes, allNotes, sourceId, targetId),
                     ),
                   ),
                 );
@@ -375,7 +379,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                         ? pinnedIds
                         : unpinnedIds,
                     onReorder: (sourceId, targetId) =>
-                        _reorderNotes(notes, sourceId, targetId),
+                        _reorderNotes(notes, allNotes, sourceId, targetId),
                   ),
                 ),
               ),
@@ -385,6 +389,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
 
   Future<void> _reorderNotes(
     List<NotePreview> visibleNotes,
+    List<NotePreview> allNotes,
     String sourceId,
     String targetId,
   ) async {
@@ -397,9 +402,18 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       return;
     }
 
-    final reordered = [...visibleNotes];
-    final source = reordered.removeAt(sourceIndex);
-    reordered.insert(targetIndex, source);
+    final reorderedVisible = [...visibleNotes];
+    final source = reorderedVisible.removeAt(sourceIndex);
+    reorderedVisible.insert(targetIndex, source);
+    final visibleIds = visibleNotes.map((note) => note.id).toSet();
+    var visibleIndex = 0;
+    final reordered = [
+      for (final note in allNotes)
+        if (visibleIds.contains(note.id))
+          reorderedVisible[visibleIndex++]
+        else
+          note,
+    ];
     try {
       await ref
           .read(notesRepositoryProvider)
@@ -684,6 +698,23 @@ class _ReorderableNote extends ConsumerStatefulWidget {
 
 class _ReorderableNoteState extends ConsumerState<_ReorderableNote> {
   double _dragDistance = 0;
+  EdgeDraggingAutoScroller? _autoScroller;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scrollable = Scrollable.maybeOf(context);
+    if (scrollable != null && _autoScroller?.scrollable != scrollable) {
+      _autoScroller?.stopAutoScroll();
+      _autoScroller = EdgeDraggingAutoScroller(scrollable, velocityScalar: 50);
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoScroller?.stopAutoScroll();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -713,37 +744,50 @@ class _ReorderableNoteState extends ConsumerState<_ReorderableNote> {
                   ? Duration.zero
                   : const Duration(milliseconds: 120),
               curve: Curves.easeOutCubic,
-              child: LongPressDraggable<String>(
-                data: note.id,
-                delay: const Duration(milliseconds: 320),
-                hapticFeedbackOnStart: true,
-                onDragStarted: () => _dragDistance = 0,
-                onDragUpdate: (details) {
-                  _dragDistance += details.delta.distance;
+              child: Semantics(
+                onLongPress: () {
+                  unawaited(_showNoteCardActions(context, ref, note));
                 },
-                onDragEnd: (details) {
-                  if (!details.wasAccepted && _dragDistance < 12 && mounted) {
-                    unawaited(_showNoteCardActions(context, ref, note));
-                  }
-                },
-                feedback: Material(
-                  type: MaterialType.transparency,
-                  child: SizedBox(
-                    width: width,
-                    child: Transform.scale(
-                      scale: 1.02,
-                      child: Opacity(
-                        opacity: 0.92,
-                        child: NoteCard(
-                          note: note,
-                          maxHeight: widget.maxHeight,
+                child: LongPressDraggable<String>(
+                  data: note.id,
+                  delay: const Duration(milliseconds: 320),
+                  hapticFeedbackOnStart: true,
+                  onDragStarted: () => _dragDistance = 0,
+                  onDragUpdate: (details) {
+                    _dragDistance += details.delta.distance;
+                    _autoScroller?.startAutoScrollIfNecessary(
+                      Rect.fromCenter(
+                        center: details.globalPosition,
+                        width: 48,
+                        height: 96,
+                      ),
+                    );
+                  },
+                  onDragEnd: (details) {
+                    _autoScroller?.stopAutoScroll();
+                    if (!details.wasAccepted && _dragDistance < 12 && mounted) {
+                      unawaited(_showNoteCardActions(context, ref, note));
+                    }
+                  },
+                  feedback: Material(
+                    type: MaterialType.transparency,
+                    child: SizedBox(
+                      width: width,
+                      child: Transform.scale(
+                        scale: 1.02,
+                        child: Opacity(
+                          opacity: 0.92,
+                          child: NoteCard(
+                            note: note,
+                            maxHeight: widget.maxHeight,
+                          ),
                         ),
                       ),
                     ),
                   ),
+                  childWhenDragging: Opacity(opacity: 0.2, child: card),
+                  child: card,
                 ),
-                childWhenDragging: Opacity(opacity: 0.2, child: card),
-                child: card,
               ),
             );
           },

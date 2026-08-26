@@ -84,15 +84,6 @@ class NotesRepository {
         : null;
 
     await _db.transaction(() async {
-      final firstInGroup =
-          await (_db.select(_db.notes)
-                ..where(
-                  (note) =>
-                      note.trashedAt.isNull() & note.isPinned.equals(pinned),
-                )
-                ..orderBy([(note) => OrderingTerm(expression: note.sortOrder)])
-                ..limit(1))
-              .getSingleOrNull();
       await _db
           .into(_db.notes)
           .insert(
@@ -106,7 +97,7 @@ class NotesRepository {
               moodConfidence: Value(analysis?.confidence ?? 1),
               moodModelVersion: Value(analysis?.modelVersion ?? 0),
               isPinned: Value(pinned),
-              sortOrder: Value((firstInGroup?.sortOrder ?? 1) - 1),
+              sortOrder: Value(await _leadingSortOrder(pinned)),
               createdAt: now,
               updatedAt: now,
             ),
@@ -175,6 +166,14 @@ class NotesRepository {
         : null;
 
     await _db.transaction(() async {
+      final existing =
+          await (_db.select(_db.notes)
+                ..where((note) => note.id.equals(id))
+                ..limit(1))
+              .getSingleOrNull();
+      final sortOrder = existing != null && existing.isPinned != pinned
+          ? Value(await _leadingSortOrder(pinned))
+          : const Value<int>.absent();
       await (_db.update(_db.notes)..where((note) => note.id.equals(id))).write(
         NotesCompanion(
           title: Value(trimmedTitle),
@@ -184,6 +183,7 @@ class NotesRepository {
           moodConfidence: Value(analysis?.confidence ?? 1),
           moodModelVersion: Value(analysis?.modelVersion ?? 0),
           isPinned: Value(pinned),
+          sortOrder: sortOrder,
           updatedAt: Value(now),
         ),
       );
@@ -210,21 +210,20 @@ class NotesRepository {
   Future<void> setPinned(String noteId, bool pinned) async {
     final now = DateTime.now().toUtc();
     await _db.transaction(() async {
-      final firstInGroup =
+      final existing =
           await (_db.select(_db.notes)
-                ..where(
-                  (note) =>
-                      note.trashedAt.isNull() & note.isPinned.equals(pinned),
-                )
-                ..orderBy([(note) => OrderingTerm(expression: note.sortOrder)])
+                ..where((note) => note.id.equals(noteId))
                 ..limit(1))
               .getSingleOrNull();
+      if (existing == null || existing.isPinned == pinned) {
+        return;
+      }
       await (_db.update(
         _db.notes,
       )..where((note) => note.id.equals(noteId))).write(
         NotesCompanion(
           isPinned: Value(pinned),
-          sortOrder: Value((firstInGroup?.sortOrder ?? 1) - 1),
+          sortOrder: Value(await _leadingSortOrder(pinned)),
           updatedAt: Value(now),
         ),
       );
@@ -254,6 +253,19 @@ class NotesRepository {
         );
       }
     });
+  }
+
+  Future<int> _leadingSortOrder(bool pinned) async {
+    final firstInGroup =
+        await (_db.select(_db.notes)
+              ..where(
+                (note) =>
+                    note.trashedAt.isNull() & note.isPinned.equals(pinned),
+              )
+              ..orderBy([(note) => OrderingTerm(expression: note.sortOrder)])
+              ..limit(1))
+            .getSingleOrNull();
+    return (firstInGroup?.sortOrder ?? 1) - 1;
   }
 
   Future<void> setArchived(String noteId, bool archived) async {
