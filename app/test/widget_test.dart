@@ -821,6 +821,13 @@ void main() {
     }
 
     expect(scrollable.position.pixels, greaterThan(0));
+    final placeholder = find.byKey(
+      const ValueKey('note-drop-placeholder-scroll-card-0'),
+    );
+    expect(placeholder, findsOneWidget);
+    final placeholderRect = tester.getRect(placeholder);
+    expect(placeholderRect.bottom, greaterThan(viewport.top));
+    expect(placeholderRect.top, lessThan(viewport.bottom));
 
     await gesture.cancel();
     await tester.pumpAndSettle();

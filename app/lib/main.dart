@@ -154,12 +154,15 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   List<String>? _dragOrderIds;
   List<String>? _dragOriginalOrderIds;
   Set<String> _dragVisibleIds = const {};
+  Map<String, bool> _dragPinnedById = const {};
+  Offset? _dragGlobalPosition;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
+    _notesScrollController.addListener(_onNotesScrolled);
     final reminderScheduler = ref.read(reminderSchedulerProvider);
     _notificationOpenSubscription = reminderScheduler.openNoteRequests.listen(
       _openNoteFromNotification,
@@ -280,8 +283,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     gridLayout: _gridLayout,
                     onFilterChanged: (filter) =>
                         setState(() => _filter = filter),
-                    onLayoutChanged: (gridLayout) =>
-                        setState(() => _gridLayout = gridLayout),
+                    onLayoutChanged: _setGridLayout,
                   ),
                 ),
               ),
@@ -366,6 +368,9 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     final noteIndices = {
       for (var index = 0; index < notes.length; index++) notes[index].id: index,
     };
+    final visibleIds = noteIndices.keys.toSet();
+    _notePositions.removeWhere((id, _) => !visibleIds.contains(id));
+    _noteRects.removeWhere((id, _) => !visibleIds.contains(id));
     int? findNoteIndex(Key key) =>
         key is ValueKey<String> ? noteIndices[key.value] : null;
 
@@ -400,7 +405,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                           onDragStarted: () =>
                               _startNoteDrag(notes[index].id, notes),
                           onDragUpdate: (position) =>
-                              _updateNoteDrag(notes[index].id, position, notes),
+                              _updateNoteDrag(notes[index].id, position),
                           onDragCancelled: () =>
                               _cancelNoteDrag(notes[index].id),
                         ),
@@ -430,7 +435,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                       onDragStarted: () =>
                           _startNoteDrag(notes[index].id, notes),
                       onDragUpdate: (position) =>
-                          _updateNoteDrag(notes[index].id, position, notes),
+                          _updateNoteDrag(notes[index].id, position),
                       onDragCancelled: () => _cancelNoteDrag(notes[index].id),
                     ),
                   ),
@@ -450,26 +455,23 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       _dragOrderIds = orderIds;
       _dragOriginalOrderIds = List.of(orderIds);
       _dragVisibleIds = orderIds.toSet();
+      _dragPinnedById = {for (final note in visibleNotes) note.id: note.pinned};
     });
   }
 
-  void _updateNoteDrag(
-    String sourceId,
-    Offset globalPosition,
-    List<NotePreview> visibleNotes,
-  ) {
+  void _updateNoteDrag(String sourceId, Offset globalPosition) {
     final orderIds = _dragOrderIds;
     if (_draggedNoteId != sourceId || orderIds == null) {
       return;
     }
-    final notesById = {for (final note in visibleNotes) note.id: note};
-    final source = notesById[sourceId];
-    if (source == null) {
+    _dragGlobalPosition = globalPosition;
+    final sourcePinned = _dragPinnedById[sourceId];
+    if (sourcePinned == null) {
       return;
     }
 
     final groupIds = orderIds
-        .where((id) => id != sourceId && notesById[id]?.pinned == source.pinned)
+        .where((id) => id != sourceId && _dragPinnedById[id] == sourcePinned)
         .toList();
     final measuredGroupIds = groupIds
         .where((id) => _noteRects.containsKey(id))
@@ -595,7 +597,26 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       _dragOrderIds = null;
       _dragOriginalOrderIds = null;
       _dragVisibleIds = const {};
+      _dragPinnedById = const {};
+      _dragGlobalPosition = null;
     });
+  }
+
+  void _onNotesScrolled() {
+    final sourceId = _draggedNoteId;
+    final globalPosition = _dragGlobalPosition;
+    if (sourceId != null && globalPosition != null) {
+      _updateNoteDrag(sourceId, globalPosition);
+    }
+  }
+
+  void _setGridLayout(bool gridLayout) {
+    if (_gridLayout == gridLayout) {
+      return;
+    }
+    _notePositions.clear();
+    _noteRects.clear();
+    setState(() => _gridLayout = gridLayout);
   }
 
   void _recordNoteLayout(String noteId, Offset position, Size size) {
