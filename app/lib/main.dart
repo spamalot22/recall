@@ -486,23 +486,41 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     final pointer = globalPosition + Offset(0, scrollOffset);
     final firstGroupId = groupIds.first;
     final lastGroupId = groupIds.last;
-    final top = measuredGroupIds
+    var targetGroupIds = measuredGroupIds;
+    if (_gridLayout) {
+      final columnAnchorId = measuredGroupIds.reduce((closestId, candidateId) {
+        final closestDistance = _horizontalDistanceToRect(
+          pointer.dx,
+          _noteRects[closestId]!,
+        );
+        final candidateDistance = _horizontalDistanceToRect(
+          pointer.dx,
+          _noteRects[candidateId]!,
+        );
+        return candidateDistance < closestDistance ? candidateId : closestId;
+      });
+      final columnAnchor = _noteRects[columnAnchorId]!;
+      targetGroupIds = measuredGroupIds
+          .where((id) => _rectsShareColumn(_noteRects[id]!, columnAnchor))
+          .toList();
+    }
+    final top = targetGroupIds
         .map((id) => _noteRects[id]!.top)
         .reduce(math.min);
-    final bottom = measuredGroupIds
+    final bottom = targetGroupIds
         .map((id) => _noteRects[id]!.bottom)
         .reduce(math.max);
 
     late final String targetId;
     late final bool placeAfter;
     if (pointer.dy <= top) {
-      targetId = firstGroupId;
+      targetId = _gridLayout ? targetGroupIds.first : firstGroupId;
       placeAfter = false;
     } else if (pointer.dy >= bottom) {
       targetId = lastGroupId;
       placeAfter = true;
     } else {
-      targetId = measuredGroupIds.reduce((closestId, candidateId) {
+      targetId = targetGroupIds.reduce((closestId, candidateId) {
         final closestDistance = _distanceSquaredToRect(
           pointer,
           _noteRects[closestId]!,
@@ -515,9 +533,13 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       });
       final targetRect = _noteRects[targetId]!;
       final verticalDifference = pointer.dy - targetRect.center.dy;
-      placeAfter = verticalDifference.abs() > targetRect.height * 0.16
-          ? verticalDifference > 0
-          : pointer.dx > targetRect.center.dx;
+      if (_gridLayout) {
+        placeAfter = verticalDifference >= 0;
+      } else if (verticalDifference.abs() > targetRect.height * 0.16) {
+        placeAfter = verticalDifference > 0;
+      } else {
+        placeAfter = pointer.dx > targetRect.center.dx;
+      }
     }
 
     final reordered = List<String>.of(orderIds)..remove(sourceId);
@@ -649,6 +671,22 @@ double _distanceSquaredToRect(Offset point, Rect rect) {
       ? point.dy - rect.bottom
       : 0.0;
   return dx * dx + dy * dy;
+}
+
+double _horizontalDistanceToRect(double x, Rect rect) {
+  if (x < rect.left) {
+    return rect.left - x;
+  }
+  if (x > rect.right) {
+    return x - rect.right;
+  }
+  return 0;
+}
+
+bool _rectsShareColumn(Rect first, Rect second) {
+  final overlap =
+      math.min(first.right, second.right) - math.max(first.left, second.left);
+  return overlap >= math.min(first.width, second.width) * 0.5;
 }
 
 class _HomeControls extends StatelessWidget {

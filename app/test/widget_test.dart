@@ -589,6 +589,102 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   });
 
+  testWidgets('grid drop targets empty space in the pointed column', (
+    tester,
+  ) async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    final firstId = await repository.createTextNote(
+      title: 'Column first',
+      body: '',
+    );
+    final secondId = await repository.createTextNote(
+      title: 'Column second',
+      body: '',
+    );
+    final tallId = await repository.createTextNote(
+      title: 'Tall opposite card',
+      body: List.filled(24, 'A tall card body').join(' '),
+    );
+    final sourceId = await repository.createTextNote(
+      title: 'Move to short column',
+      body: '',
+    );
+    final lastShortColumnId = await repository.createTextNote(
+      title: 'Last short-column card',
+      body: '',
+    );
+    await repository.reorderNotes([
+      firstId,
+      secondId,
+      tallId,
+      sourceId,
+      lastShortColumnId,
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tallRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$tallId')),
+    );
+    final lastShortColumnRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$lastShortColumnId')),
+    );
+    expect(
+      (lastShortColumnRect.center.dx - tallRect.center.dx).abs(),
+      greaterThan(100),
+    );
+    expect(lastShortColumnRect.bottom, lessThan(tallRect.bottom));
+    final target = Offset(
+      lastShortColumnRect.center.dx,
+      (lastShortColumnRect.bottom + tallRect.bottom) / 2,
+    );
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('Move to short column')),
+    );
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(target);
+    for (var frame = 0; frame < 36; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+
+    final placeholderRect = tester.getRect(
+      find.byKey(ValueKey('note-drop-placeholder-$sourceId')),
+    );
+    expect(
+      placeholderRect.center.dx,
+      closeTo(lastShortColumnRect.center.dx, 1),
+    );
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [firstId, secondId, tallId, lastShortColumnId, sourceId],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
   testWidgets('a card can be dropped into empty space before the first card', (
     tester,
   ) async {
