@@ -511,43 +511,58 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         .map((id) => _noteRects[id]!.bottom)
         .reduce(math.max);
 
-    late final String targetId;
-    late final bool placeAfter;
-    if (pointer.dy <= top) {
-      targetId = _gridLayout ? targetGroupIds.first : firstGroupId;
-      placeAfter = false;
-    } else if (pointer.dy >= bottom) {
-      targetId = lastGroupId;
-      placeAfter = true;
-    } else {
-      targetId = targetGroupIds.reduce((closestId, candidateId) {
-        final closestDistance = _distanceSquaredToRect(
-          pointer,
-          _noteRects[closestId]!,
-        );
-        final candidateDistance = _distanceSquaredToRect(
-          pointer,
-          _noteRects[candidateId]!,
-        );
-        return candidateDistance < closestDistance ? candidateId : closestId;
-      });
-      final targetRect = _noteRects[targetId]!;
-      final verticalDifference = pointer.dy - targetRect.center.dy;
-      if (_gridLayout) {
-        placeAfter = verticalDifference >= 0;
-      } else if (verticalDifference.abs() > targetRect.height * 0.16) {
-        placeAfter = verticalDifference > 0;
-      } else {
-        placeAfter = pointer.dx > targetRect.center.dx;
-      }
+    List<String>? reordered;
+    if (_gridLayout && pointer.dy >= bottom) {
+      reordered = _masonryOrderForEmptySpace(
+        orderIds: orderIds,
+        sourceId: sourceId,
+        pinnedById: _dragPinnedById,
+        noteRects: _noteRects,
+        targetColumnAnchor: _noteRects[targetGroupIds.first]!,
+        targetColumnBottom: bottom,
+        pointer: pointer,
+      );
     }
 
-    final reordered = List<String>.of(orderIds)..remove(sourceId);
-    final targetIndex = reordered.indexOf(targetId);
-    if (targetIndex < 0) {
-      return;
+    if (reordered == null) {
+      late final String targetId;
+      late final bool placeAfter;
+      if (pointer.dy <= top) {
+        targetId = _gridLayout ? targetGroupIds.first : firstGroupId;
+        placeAfter = false;
+      } else if (pointer.dy >= bottom) {
+        targetId = lastGroupId;
+        placeAfter = true;
+      } else {
+        targetId = targetGroupIds.reduce((closestId, candidateId) {
+          final closestDistance = _distanceSquaredToRect(
+            pointer,
+            _noteRects[closestId]!,
+          );
+          final candidateDistance = _distanceSquaredToRect(
+            pointer,
+            _noteRects[candidateId]!,
+          );
+          return candidateDistance < closestDistance ? candidateId : closestId;
+        });
+        final targetRect = _noteRects[targetId]!;
+        final verticalDifference = pointer.dy - targetRect.center.dy;
+        if (_gridLayout) {
+          placeAfter = verticalDifference >= 0;
+        } else if (verticalDifference.abs() > targetRect.height * 0.16) {
+          placeAfter = verticalDifference > 0;
+        } else {
+          placeAfter = pointer.dx > targetRect.center.dx;
+        }
+      }
+
+      reordered = List<String>.of(orderIds)..remove(sourceId);
+      final targetIndex = reordered.indexOf(targetId);
+      if (targetIndex < 0) {
+        return;
+      }
+      reordered.insert(targetIndex + (placeAfter ? 1 : 0), sourceId);
     }
-    reordered.insert(targetIndex + (placeAfter ? 1 : 0), sourceId);
     if (_sameOrder(reordered, orderIds)) {
       return;
     }
@@ -687,6 +702,103 @@ bool _rectsShareColumn(Rect first, Rect second) {
   final overlap =
       math.min(first.right, second.right) - math.max(first.left, second.left);
   return overlap >= math.min(first.width, second.width) * 0.5;
+}
+
+List<String>? _masonryOrderForEmptySpace({
+  required List<String> orderIds,
+  required String sourceId,
+  required Map<String, bool> pinnedById,
+  required Map<String, Rect> noteRects,
+  required Rect targetColumnAnchor,
+  required double targetColumnBottom,
+  required Offset pointer,
+}) {
+  final sourceRect = noteRects[sourceId];
+  final sourcePinned = pinnedById[sourceId];
+  if (sourceRect == null || sourcePinned == null) {
+    return null;
+  }
+
+  final columnAnchors = <Rect>[];
+  for (final rect in noteRects.values) {
+    if (!columnAnchors.any((anchor) => _rectsShareColumn(rect, anchor))) {
+      columnAnchors.add(rect);
+    }
+  }
+  columnAnchors.sort((first, second) => first.left.compareTo(second.left));
+  final targetColumn = columnAnchors.indexWhere(
+    (anchor) => _rectsShareColumn(anchor, targetColumnAnchor),
+  );
+  if (targetColumn < 0 || columnAnchors.length < 2) {
+    return null;
+  }
+
+  final withoutSource = List<String>.of(orderIds)..remove(sourceId);
+  final sameGroupIndexes = <int>[
+    for (var index = 0; index < withoutSource.length; index++)
+      if (pinnedById[withoutSource[index]] == sourcePinned) index,
+  ];
+  if (sameGroupIndexes.isEmpty) {
+    return null;
+  }
+
+  final firstInsertion = sameGroupIndexes.first;
+  final lastInsertion = sameGroupIndexes.last + 1;
+  final layoutTop = noteRects.values.map((rect) => rect.top).reduce(math.min);
+  final desiredTop = targetColumnBottom + 12;
+  List<String>? bestOrder;
+  double? bestPointerDistance;
+  double? bestTopDistance;
+  // Replay the masonry prefix once; each prefix is a possible source slot.
+  final columnOffsets = List<double>.filled(columnAnchors.length, layoutTop);
+
+  for (
+    var insertionIndex = 0;
+    insertionIndex <= lastInsertion;
+    insertionIndex++
+  ) {
+    var shortestColumn = 0;
+    for (var candidate = 1; candidate < columnOffsets.length; candidate++) {
+      if (columnOffsets[candidate] < columnOffsets[shortestColumn]) {
+        shortestColumn = candidate;
+      }
+    }
+    final sourceTop = columnOffsets[shortestColumn];
+
+    if (insertionIndex >= firstInsertion && shortestColumn == targetColumn) {
+      final predictedRect = Rect.fromLTWH(
+        columnAnchors[targetColumn].left,
+        sourceTop,
+        sourceRect.width,
+        sourceRect.height,
+      );
+      final pointerDistance = _distanceSquaredToRect(pointer, predictedRect);
+      final topDistance = (sourceTop - desiredTop).abs();
+      final isBetter =
+          bestOrder == null ||
+          pointerDistance < bestPointerDistance! ||
+          (pointerDistance == bestPointerDistance &&
+              topDistance < bestTopDistance!);
+      if (isBetter) {
+        bestOrder = List<String>.of(withoutSource)
+          ..insert(insertionIndex, sourceId);
+        bestPointerDistance = pointerDistance;
+        bestTopDistance = topDistance;
+      }
+    }
+
+    if (insertionIndex == withoutSource.length) {
+      break;
+    }
+    final rect = noteRects[withoutSource[insertionIndex]];
+    if (rect == null) {
+      break;
+    }
+    columnOffsets[shortestColumn] =
+        columnOffsets[shortestColumn] + rect.height + 12;
+  }
+
+  return bestOrder;
 }
 
 class _HomeControls extends StatelessWidget {
