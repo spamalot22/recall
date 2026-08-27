@@ -148,6 +148,8 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   _NoteFilter _filter = _NoteFilter.all;
   final Map<String, Offset> _notePositions = {};
   final Map<String, Rect> _noteRects = {};
+  final Map<String, GlobalKey<_NotePositionTransitionState>>
+  _noteTransitionKeys = {};
   Map<String, Offset> _reorderStartPositions = const {};
   int _reorderAnimationGeneration = 0;
   String? _draggedNoteId;
@@ -371,6 +373,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     final visibleIds = noteIndices.keys.toSet();
     _notePositions.removeWhere((id, _) => !visibleIds.contains(id));
     _noteRects.removeWhere((id, _) => !visibleIds.contains(id));
+    _noteTransitionKeys.removeWhere((id, _) => !visibleIds.contains(id));
     int? findNoteIndex(Key key) =>
         key is ValueKey<String> ? noteIndices[key.value] : null;
 
@@ -386,6 +389,13 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     ? 3
                     : 2;
                 return SliverMasonryGrid(
+                  // Wide masonry layouts retain stale column parent data when
+                  // keyed children move; preserve card state while resetting
+                  // that render object for each live reorder.
+                  key: ValueKey((
+                    columns,
+                    columns > 2 ? _reorderAnimationGeneration : 0,
+                  )),
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
                   gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
@@ -395,6 +405,10 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     (context, index) => _NoteEntrance(
                       key: ValueKey(notes[index].id),
                       child: _NotePositionTransition(
+                        key: _noteTransitionKeys.putIfAbsent(
+                          notes[index].id,
+                          GlobalKey.new,
+                        ),
                         noteId: notes[index].id,
                         generation: _reorderAnimationGeneration,
                         animateFrom: _reorderStartPositions[notes[index].id],
@@ -425,6 +439,10 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _NoteEntrance(
                   child: _NotePositionTransition(
+                    key: _noteTransitionKeys.putIfAbsent(
+                      notes[index].id,
+                      GlobalKey.new,
+                    ),
                     noteId: notes[index].id,
                     generation: _reorderAnimationGeneration,
                     animateFrom: _reorderStartPositions[notes[index].id],
@@ -1032,6 +1050,7 @@ class _NoteEntrance extends StatelessWidget {
 
 class _NotePositionTransition extends StatefulWidget {
   const _NotePositionTransition({
+    super.key,
     required this.noteId,
     required this.generation,
     required this.animateFrom,
