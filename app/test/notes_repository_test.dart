@@ -36,18 +36,65 @@ void main() {
     expect(notes.single.mood, ColorMood.errand);
   });
 
-  test('uses the persisted automatic mood for stable previews', () async {
+  test('repairs previously clear automatic moods in previews', () async {
     await repository.createTextNote(
       title: 'Buy groceries',
       body: 'Pick up milk',
     );
     await database
         .update(database.notes)
-        .write(const NotesCompanion(mood: Value('clear')));
+        .write(
+          const NotesCompanion(
+            mood: Value('clear'),
+            moodModelVersion: Value(2),
+          ),
+        );
 
     final preview = await repository.watchNotePreviews().first;
 
+    final stored = await database.select(database.notes).getSingle();
+    expect(preview.single.mood, ColorMood.errand);
+    expect(stored.mood, ColorMood.errand.name);
+    expect(stored.moodModelVersion, currentMoodModelVersion);
+  });
+
+  test(
+    'recalculates old automatic colours without preserving false urgency',
+    () async {
+      await repository.createTextNote(
+        title: '',
+        body: 'I feel sad and disappointed today',
+      );
+      await database
+          .update(database.notes)
+          .write(
+            const NotesCompanion(
+              mood: Value('urgent'),
+              moodModelVersion: Value(2),
+            ),
+          );
+
+      final preview = await repository.watchNotePreviews().first;
+      final stored = await database.select(database.notes).getSingle();
+
+      expect(preview.single.mood, isNot(ColorMood.urgent));
+      expect(stored.mood, preview.single.mood.name);
+      expect(stored.moodModelVersion, currentMoodModelVersion);
+    },
+  );
+
+  test('preserves a manually selected clear mood', () async {
+    await repository.createTextNote(
+      title: 'No automatic colour',
+      body: 'Keep my explicit choice',
+      mood: ColorMood.clear,
+    );
+
+    final preview = await repository.watchNotePreviews().first;
+    final stored = await database.select(database.notes).getSingle();
+
     expect(preview.single.mood, ColorMood.clear);
+    expect(stored.moodIsAutomatic, isFalse);
   });
 
   test('persists manual note order without edits moving cards', () async {
@@ -116,7 +163,7 @@ void main() {
       expect(loaded?.mood, ColorMood.errand);
       expect(loaded?.moodIsAutomatic, isTrue);
       var stored = await database.select(database.notes).getSingle();
-      expect(stored.moodModelVersion, 2);
+      expect(stored.moodModelVersion, currentMoodModelVersion);
       expect(stored.moodConfidence, inInclusiveRange(0, 1));
 
       await repository.updateTextNote(

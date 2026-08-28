@@ -27,6 +27,7 @@ class NotesRepository {
 
     return query.watch().asyncMap((notes) async {
       final previews = <NotePreview>[];
+      final moodRefreshes = <({String id, MoodAnalysis analysis})>[];
 
       for (final note in notes) {
         final checklistItems =
@@ -37,12 +38,25 @@ class NotesRepository {
                   ]))
                 .get();
         final reminder = await _firstEnabledReminder(note.id);
+        var mood = ColorMood.fromName(note.mood);
+        final refreshedMood = await _refreshAutomaticMood(
+          automatic: note.moodIsAutomatic,
+          modelVersion: note.moodModelVersion,
+          title: note.title,
+          body: note.body,
+          checklistItems: checklistItems.map((item) => item.content),
+          reminder: reminder,
+        );
+        if (refreshedMood != null) {
+          mood = refreshedMood.mood;
+          moodRefreshes.add((id: note.id, analysis: refreshedMood));
+        }
         previews.add(
           NotePreview(
             id: note.id,
             title: note.title,
             body: note.body,
-            mood: ColorMood.fromName(note.mood),
+            mood: mood,
             reminderLabel: _formatReminderLabel(reminder),
             checklistItems: checklistItems
                 .map(
@@ -56,6 +70,28 @@ class NotesRepository {
             reminderAt: reminder?.nextFireAt,
           ),
         );
+      }
+
+      if (moodRefreshes.isNotEmpty) {
+        await _db.transaction(() async {
+          for (final refresh in moodRefreshes) {
+            await (_db.update(_db.notes)..where(
+                  (note) =>
+                      note.id.equals(refresh.id) &
+                      note.moodIsAutomatic.equals(true) &
+                      note.moodModelVersion.isSmallerThanValue(
+                        currentMoodModelVersion,
+                      ),
+                ))
+                .write(
+                  NotesCompanion(
+                    mood: Value(refresh.analysis.mood.name),
+                    moodConfidence: Value(refresh.analysis.confidence),
+                    moodModelVersion: Value(refresh.analysis.modelVersion),
+                  ),
+                );
+          }
+        });
       }
 
       return previews;
@@ -127,21 +163,79 @@ class NotesRepository {
     }
 
     final note = notes.single;
+    final checklistItems = await _checklistItemsFor(note.id);
+    final reminder = await _firstEnabledReminder(note.id);
+    var mood = ColorMood.fromName(note.mood);
+    final refreshedMood = await _refreshAutomaticMood(
+      automatic: note.moodIsAutomatic,
+      modelVersion: note.moodModelVersion,
+      title: note.title,
+      body: note.body,
+      checklistItems: checklistItems.map((item) => item.content),
+      reminder: reminder,
+    );
+    if (refreshedMood != null) {
+      mood = refreshedMood.mood;
+      await (_db.update(_db.notes)..where(
+            (candidate) =>
+                candidate.id.equals(note.id) &
+                candidate.moodIsAutomatic.equals(true) &
+                candidate.moodModelVersion.isSmallerThanValue(
+                  currentMoodModelVersion,
+                ),
+          ))
+          .write(
+            NotesCompanion(
+              mood: Value(refreshedMood.mood.name),
+              moodConfidence: Value(refreshedMood.confidence),
+              moodModelVersion: Value(refreshedMood.modelVersion),
+            ),
+          );
+    }
 
     return NoteEditorSnapshot(
       id: note.id,
       title: note.title,
       body: note.body,
-      mood: ColorMood.fromName(note.mood),
+      mood: mood,
       moodIsAutomatic: note.moodIsAutomatic,
       pinned: note.isPinned,
-      checklistItems: (await _checklistItemsFor(note.id))
+      checklistItems: checklistItems
           .map(
             (item) => ChecklistItemDraft(text: item.content, done: item.isDone),
           )
           .toList(),
-      reminder: await _firstEnabledReminder(note.id),
+      reminder: reminder,
     );
+  }
+
+  Future<MoodAnalysis?> _refreshAutomaticMood({
+    required bool automatic,
+    required int modelVersion,
+    required String title,
+    required String body,
+    required Iterable<String> checklistItems,
+    required NoteReminder? reminder,
+  }) async {
+    if (!automatic || modelVersion >= currentMoodModelVersion) {
+      return null;
+    }
+    final items = checklistItems.toList(growable: false);
+    final hasContent =
+        title.trim().isNotEmpty ||
+        body.trim().isNotEmpty ||
+        items.any((item) => item.trim().isNotEmpty) ||
+        reminder != null;
+    if (!hasContent) {
+      return null;
+    }
+    final analysis = await _moodAnalyzer.analyze(
+      title: title,
+      body: body,
+      checklistItems: items,
+      reminder: reminder,
+    );
+    return analysis;
   }
 
   Future<void> updateTextNote({

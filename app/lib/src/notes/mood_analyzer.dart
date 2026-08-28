@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -6,8 +8,13 @@ import 'package:flutter/services.dart';
 import 'note_models.dart';
 import 'roberta_tokenizer.dart';
 
-const currentMoodModelVersion = 2;
+const currentMoodModelVersion = 3;
 const _emotionLabelCount = 28;
+const _fallbackModelAsset = 'assets/models/recall_goemotions_v1.bin';
+const _fallbackModelFormatVersion = 1;
+const _fallbackFeatureBuckets = 32768;
+const _maxAnalysisCharacters = 8192;
+const _maxAnalysisTokens = 256;
 
 class MoodAnalysis {
   const MoodAnalysis({
@@ -45,6 +52,7 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
 
   final ContextualEmotionClassifier _classifier;
   final bool contextualAnalysisEnabled;
+  Future<_FallbackEmotionModel>? _fallbackModel;
 
   @override
   Future<MoodAnalysis> analyze({
@@ -54,10 +62,14 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
     NoteReminder? reminder,
     DateTime? now,
   }) async {
+    final cleanChecklistItems = checklistItems
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
     final functionalMood = automaticMoodForNote(
       title: title,
       body: body,
-      checklistItems: checklistItems,
+      checklistItems: cleanChecklistItems,
       reminder: reminder,
       now: now,
     );
@@ -70,7 +82,10 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
     }
 
     final cleanTitle = title.trim();
-    final cleanBody = body.trim();
+    final cleanBody = [
+      if (body.trim().isNotEmpty) body.trim(),
+      ...cleanChecklistItems,
+    ].join('\n');
     if (cleanTitle.isEmpty && cleanBody.isEmpty) {
       return const MoodAnalysis(
         mood: ColorMood.clear,
@@ -81,30 +96,35 @@ class RecallMoodAnalyzer implements MoodAnalyzer {
 
     // Keep the native model behind an explicit build flag until its Android
     // runtime has been validated across supported physical devices.
-    if (!contextualAnalysisEnabled) {
-      return const MoodAnalysis(
-        mood: ColorMood.clear,
-        confidence: 0,
-        modelVersion: 0,
-      );
+    if (contextualAnalysisEnabled) {
+      try {
+        final texts = <String>[
+          if (cleanTitle.isNotEmpty) cleanTitle,
+          if (cleanBody.isNotEmpty) cleanBody,
+        ];
+        final scores = await _classifier.classify(texts);
+        final contextual = _analyzeScores(
+          scores,
+          hasTitle: cleanTitle.isNotEmpty,
+          hasBody: cleanBody.isNotEmpty,
+        );
+        if (contextual.mood != ColorMood.clear) {
+          return contextual;
+        }
+      } on Object {
+        // Fall through to the platform-independent bundled model.
+      }
     }
 
     try {
-      final texts = <String>[
-        if (cleanTitle.isNotEmpty) cleanTitle,
-        if (cleanBody.isNotEmpty) cleanBody,
-      ];
-      final scores = await _classifier.classify(texts);
-      return _analyzeScores(
-        scores,
-        hasTitle: cleanTitle.isNotEmpty,
-        hasBody: cleanBody.isNotEmpty,
-      );
+      final model = await (_fallbackModel ??= _FallbackEmotionModel.load());
+      return model.analyze(title: cleanTitle, body: cleanBody);
     } on Object {
-      return const MoodAnalysis(
-        mood: ColorMood.clear,
+      final source = '$cleanTitle\n$cleanBody';
+      return MoodAnalysis(
+        mood: _stableFallbackMood(source),
         confidence: 0,
-        modelVersion: 0,
+        modelVersion: currentMoodModelVersion,
       );
     }
   }
@@ -200,6 +220,159 @@ MoodAnalysis _analyzeScores(
     confidence: confidence,
     modelVersion: currentMoodModelVersion,
   );
+}
+
+class _FallbackEmotionModel {
+  _FallbackEmotionModel(this._labels);
+
+  final List<_FallbackLabelModel> _labels;
+
+  static Future<_FallbackEmotionModel> load() async {
+    final data = await rootBundle.load(_fallbackModelAsset);
+    final bytes = data.buffer.asUint8List(
+      data.offsetInBytes,
+      data.lengthInBytes,
+    );
+    if (bytes.length < 12 ||
+        String.fromCharCodes(bytes.take(4)) != 'RCLM' ||
+        data.getUint16(4, Endian.little) != _fallbackModelFormatVersion ||
+        data.getUint16(6, Endian.little) != _Emotion.values.length ||
+        data.getUint32(8, Endian.little) != _fallbackFeatureBuckets) {
+      throw const FormatException('Recall fallback mood model is invalid.');
+    }
+
+    var offset = 12;
+    final labels = <_FallbackLabelModel>[];
+    for (var index = 0; index < _Emotion.values.length; index++) {
+      final bias = data.getFloat32(offset, Endian.little);
+      final scale = data.getFloat32(offset + 4, Endian.little);
+      if (!bias.isFinite || !scale.isFinite || scale <= 0 || scale > 100) {
+        throw const FormatException(
+          'Recall fallback mood model has invalid weights.',
+        );
+      }
+      offset += 8;
+      final end = offset + _fallbackFeatureBuckets;
+      if (end > bytes.length) {
+        throw const FormatException('Recall fallback mood model is truncated.');
+      }
+      labels.add(
+        _FallbackLabelModel(
+          bias: bias,
+          scale: scale,
+          weights: Int8List.sublistView(bytes, offset, end),
+        ),
+      );
+      offset = end;
+    }
+    if (offset != bytes.length) {
+      throw const FormatException(
+        'Recall fallback mood model has trailing data.',
+      );
+    }
+    return _FallbackEmotionModel(labels);
+  }
+
+  MoodAnalysis analyze({required String title, required String body}) {
+    final titleScores = title.isEmpty ? null : _scores(title);
+    final bodyScores = body.isEmpty ? null : _scores(body);
+    final scores = List<double>.generate(_labels.length, (index) {
+      if (titleScores == null) return bodyScores![index];
+      if (bodyScores == null) return titleScores[index];
+      return titleScores[index] * 0.2 + bodyScores[index] * 0.8;
+    });
+
+    final grouped = <ColorMood, double>{};
+    for (var index = 0; index < scores.length; index++) {
+      final mood = _emotionMoods[_Emotion.values[index]]!;
+      if (mood == ColorMood.clear) {
+        continue;
+      }
+      grouped[mood] = math.max(
+        grouped[mood] ?? double.negativeInfinity,
+        scores[index],
+      );
+    }
+    final ranked = grouped.entries.toList()
+      ..sort((left, right) => right.value.compareTo(left.value));
+    final winner = ranked.first;
+
+    return MoodAnalysis(
+      mood: winner.key,
+      confidence: _sigmoid(winner.value),
+      modelVersion: currentMoodModelVersion,
+    );
+  }
+
+  List<double> _scores(String text) {
+    final features = _fallbackFeatures(text);
+    final featureScale = 1 / math.sqrt(math.max(1, features.length));
+    return _labels
+        .map((label) {
+          var score = label.bias;
+          for (final feature in features) {
+            score += label.weights[feature] * label.scale * featureScale;
+          }
+          return score;
+        })
+        .toList(growable: false);
+  }
+}
+
+class _FallbackLabelModel {
+  const _FallbackLabelModel({
+    required this.bias,
+    required this.scale,
+    required this.weights,
+  });
+
+  final double bias;
+  final double scale;
+  final Int8List weights;
+}
+
+Set<int> _fallbackFeatures(String text) {
+  final boundedText = text.length <= _maxAnalysisCharacters
+      ? text
+      : text.substring(0, _maxAnalysisCharacters);
+  final words = RegExp(r"[a-z]+(?:'[a-z]+)?|[0-9]+")
+      .allMatches(boundedText.toLowerCase())
+      .map((match) => match.group(0)!)
+      .take(_maxAnalysisTokens)
+      .toList(growable: false);
+  final features = <int>{
+    for (final word in words)
+      _fnv1a(utf8.encode('u:$word')) % _fallbackFeatureBuckets,
+  };
+  for (var index = 1; index < words.length; index++) {
+    features.add(
+      _fnv1a(utf8.encode('b:${words[index - 1]}_${words[index]}')) %
+          _fallbackFeatureBuckets,
+    );
+  }
+  return features;
+}
+
+ColorMood _stableFallbackMood(String text) {
+  const moods = [
+    ColorMood.joyful,
+    ColorMood.warm,
+    ColorMood.calm,
+    ColorMood.reflective,
+    ColorMood.tense,
+    ColorMood.intense,
+    ColorMood.surprised,
+  ];
+  return moods[_fnv1a(utf8.encode(text)) % moods.length];
+}
+
+int _fnv1a(List<int> bytes) {
+  var hash = 0x811C9DC5;
+  for (final byte in bytes) {
+    hash ^= byte;
+    hash = (hash * 0x01000193) & 0xFFFFFFFF;
+  }
+  return hash;
 }
 
 double _sigmoid(double value) {

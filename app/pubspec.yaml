@@ -76,6 +76,7 @@ flutter:
 
   assets:
     - assets/licenses/
+    - assets/models/recall_goemotions_v1.bin
     - assets/models/recall_goemotions_v2.onnx
     - assets/models/recall_roberta_tokenizer_v2.json
 

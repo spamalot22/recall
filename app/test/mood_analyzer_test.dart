@@ -3,6 +3,8 @@ import 'package:recall_app/src/notes/mood_analyzer.dart';
 import 'package:recall_app/src/notes/note_models.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   late RecallMoodAnalyzer analyzer;
 
   setUp(() {
@@ -53,22 +55,34 @@ void main() {
     expect(result.confidence, 1);
   });
 
-  test('empty and uncertain notes remain neutral', () async {
-    await expectMood('', ColorMood.clear);
-    await expectMood('bad', ColorMood.clear);
-    await expectMood('the of and', ColorMood.clear);
-  });
+  test(
+    'empty notes remain neutral and non-empty notes always get a mood',
+    () async {
+      await expectMood('', ColorMood.clear);
+      expect(
+        (await analyzer.analyze(title: '', body: 'bad')).mood,
+        ColorMood.reflective,
+      );
+      expect(
+        (await analyzer.analyze(title: '', body: 'the of and')).mood,
+        isNot(ColorMood.clear),
+      );
+    },
+  );
 
-  test('fails closed when on-device inference is unavailable', () async {
-    final unavailable = RecallMoodAnalyzer(
-      classifier: _UnavailableEmotionClassifier(),
-      contextualAnalysisEnabled: true,
-    );
-    final result = await unavailable.analyze(title: '', body: 'I feel sad');
-    expect(result.mood, ColorMood.clear);
-    expect(result.confidence, 0);
-    expect(result.modelVersion, 0);
-  });
+  test(
+    'uses bundled fallback when on-device inference is unavailable',
+    () async {
+      final unavailable = RecallMoodAnalyzer(
+        classifier: _UnavailableEmotionClassifier(),
+        contextualAnalysisEnabled: true,
+      );
+      final result = await unavailable.analyze(title: '', body: 'I feel sad');
+      expect(result.mood, ColorMood.reflective);
+      expect(result.confidence, inInclusiveRange(0, 1));
+      expect(result.modelVersion, currentMoodModelVersion);
+    },
+  );
 
   test('release default never enters the native contextual runtime', () async {
     final classifier = _RecordingEmotionClassifier();
@@ -80,9 +94,59 @@ void main() {
     );
 
     expect(classifier.calls, 0);
-    expect(result.mood, ColorMood.clear);
-    expect(result.confidence, 0);
-    expect(result.modelVersion, 0);
+    expect(result.mood, isNot(ColorMood.clear));
+    expect(result.confidence, inInclusiveRange(0, 1));
+    expect(result.modelVersion, currentMoodModelVersion);
+  });
+
+  test('release fallback recognizes ordinary emotional language', () async {
+    final releaseAnalyzer = RecallMoodAnalyzer();
+
+    expect(
+      (await releaseAnalyzer.analyze(title: '', body: 'This is good')).mood,
+      ColorMood.warm,
+    );
+    expect(
+      (await releaseAnalyzer.analyze(title: '', body: 'This is bad')).mood,
+      ColorMood.intense,
+    );
+    expect(
+      (await releaseAnalyzer.analyze(
+        title: '',
+        body: 'I feel happy today',
+      )).mood,
+      ColorMood.joyful,
+    );
+    expect(
+      (await releaseAnalyzer.analyze(title: '', body: 'I feel sad today')).mood,
+      ColorMood.reflective,
+    );
+  });
+
+  test('fallback mood is stable for the same note text', () async {
+    final releaseAnalyzer = RecallMoodAnalyzer();
+
+    final first = await releaseAnalyzer.analyze(
+      title: 'A thought',
+      body: 'Something ambiguous happened',
+    );
+    final second = await releaseAnalyzer.analyze(
+      title: 'A thought',
+      body: 'Something ambiguous happened',
+    );
+
+    expect(first.mood, isNot(ColorMood.clear));
+    expect(second.mood, first.mood);
+  });
+
+  test('checklist text participates in sentiment analysis', () async {
+    final result = await analyzer.analyze(
+      title: '',
+      body: '',
+      checklistItems: const ['I feel sad and disappointed today'],
+    );
+
+    expect(result.mood, ColorMood.reflective);
   });
 }
 

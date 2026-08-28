@@ -6,12 +6,17 @@ in Dart, and only token IDs cross the private Flutter-to-Android method channel.
 No note content or inference result is sent over the network.
 
 Production builds currently keep this native classifier disabled while its
-runtime is validated across supported physical devices. Functional automatic
-colours and manual colour selection remain available. Development builds can
-opt in with `--dart-define=ENABLE_CONTEXTUAL_MOODS=true`.
+runtime is validated across supported physical devices. They use a compact,
+pure-Dart GoEmotions classifier as the always-available sentiment fallback, so
+every non-empty automatically coloured note receives a stable mood. Development
+builds can opt in to the richer classifier with
+`--dart-define=ENABLE_CONTEXTUAL_MOODS=true`.
 
 ## Artifacts
 
+- `recall_goemotions_v1.bin`: Recall's quantized one-vs-rest logistic
+  classifier over 32,768 hashed word and bigram features, SHA-256
+  `b2f1d886f2808765ee850d89979869fea6e56c4c8b3953eb859cf21e7a3e9b4d`.
 - `recall_goemotions_v2.onnx`: quantized six-layer MiniLMv2 model, 28
   GoEmotions labels, SHA-256
   `594ac3bf3c82e2ea187e50982ea2f811ede5377eaad0c8ad23bc04ee8a2486c6`.
@@ -31,6 +36,9 @@ GoEmotions was created by Google Research and is distributed under [CC BY
 4.0][cc-by]. The model is a third-party derivative, is not an official Google
 model, and should not be treated as a general assessment of a person's
 emotional state. Recall only uses its result to choose an optional note colour.
+
+The compact fallback was trained from the official GoEmotions training split.
+It performs inference locally in Dart and contains no note content.
 
 [model]: https://huggingface.co/minuva/MiniLMv2-goemotions-v2-onnx
 [goemotions]: https://github.com/google-research/google-research/tree/master/goemotions

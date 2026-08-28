@@ -75,6 +75,16 @@ void main() {
       );
     });
 
+    test('does not treat a casual date word as urgent by itself', () {
+      expect(
+        automaticMoodForNote(
+          title: 'Today',
+          body: 'A few thoughts from the day',
+        ),
+        ColorMood.clear,
+      );
+    });
+
     test('leaves emotional language for the learned analyser', () {
       expect(
         automaticMoodForNote(title: 'Happy news', body: 'A good day'),

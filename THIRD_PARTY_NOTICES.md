@@ -1,5 +1,12 @@
 # Third-party notices
 
+## Recall compact GoEmotions model
+
+Recall includes a compact classifier trained from the Google Research
+GoEmotions dataset. GoEmotions is Copyright 2020 Google LLC and licensed under
+the Creative Commons Attribution 4.0 International License. A copy is included
+at `app/assets/licenses/CC-BY-4.0.txt`.
+
 ## MiniLMv2 GoEmotions ONNX model
 
 Recall includes the quantized model and tokenizer from

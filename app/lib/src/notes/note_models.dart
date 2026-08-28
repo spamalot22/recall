@@ -270,7 +270,9 @@ ColorMood automaticMoodForNote({
                 .indexOf(a.key)
                 .compareTo(_moodTieBreak.indexOf(b.key));
     });
-  return ranked.first.value >= 2 ? ranked.first.key : ColorMood.clear;
+  final winner = ranked.first;
+  final threshold = winner.key == ColorMood.urgent ? 2.3 : 2.0;
+  return winner.value >= threshold ? winner.key : ColorMood.clear;
 }
 
 class _MoodRule {
@@ -296,7 +298,7 @@ final _moodRules = [
   _MoodRule(
     ColorMood.urgent,
     r'\b(?:today|tonight|tomorrow|this morning|this afternoon)\b',
-    1.8,
+    1.2,
   ),
   _MoodRule(
     ColorMood.urgent,
