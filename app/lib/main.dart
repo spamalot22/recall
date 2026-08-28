@@ -389,13 +389,10 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     ? 3
                     : 2;
                 return SliverMasonryGrid(
-                  // Wide masonry layouts retain stale column parent data when
-                  // keyed children move; preserve card state while resetting
-                  // that render object for each live reorder.
-                  key: ValueKey((
-                    columns,
-                    columns > 2 ? _reorderAnimationGeneration : 0,
-                  )),
+                  // Masonry retains stale column parent data for some keyed
+                  // moves; preserve card state while resetting the render
+                  // object for each live reorder.
+                  key: ValueKey((columns, _reorderAnimationGeneration)),
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
                   gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
@@ -505,22 +502,25 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     final firstGroupId = groupIds.first;
     final lastGroupId = groupIds.last;
     var targetGroupIds = measuredGroupIds;
+    Rect? targetColumnAnchor;
     if (_gridLayout) {
-      final columnAnchorId = measuredGroupIds.reduce((closestId, candidateId) {
-        final closestDistance = _horizontalDistanceToRect(
-          pointer.dx,
-          _noteRects[closestId]!,
-        );
+      final columnAnchors = _masonryColumnAnchors(_noteRects.values);
+      targetColumnAnchor = columnAnchors.reduce((closest, candidate) {
+        final closestDistance = _horizontalDistanceToRect(pointer.dx, closest);
         final candidateDistance = _horizontalDistanceToRect(
           pointer.dx,
-          _noteRects[candidateId]!,
+          candidate,
         );
-        return candidateDistance < closestDistance ? candidateId : closestId;
+        return candidateDistance < closestDistance ? candidate : closest;
       });
-      final columnAnchor = _noteRects[columnAnchorId]!;
       targetGroupIds = measuredGroupIds
-          .where((id) => _rectsShareColumn(_noteRects[id]!, columnAnchor))
+          .where(
+            (id) => _rectsShareColumn(_noteRects[id]!, targetColumnAnchor!),
+          )
           .toList();
+      if (targetGroupIds.isEmpty) {
+        targetGroupIds = measuredGroupIds;
+      }
     }
     final top = targetGroupIds
         .map((id) => _noteRects[id]!.top)
@@ -530,15 +530,37 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         .reduce(math.max);
 
     List<String>? reordered;
-    if (_gridLayout && pointer.dy >= bottom) {
-      reordered = _masonryOrderForEmptySpace(
+    if (_gridLayout && targetColumnAnchor != null) {
+      final sourceRect = _noteRects[sourceId]!;
+      final closestTargetId = targetGroupIds.reduce((closestId, candidateId) {
+        final closestDistance = _distanceSquaredToRect(
+          pointer,
+          _noteRects[closestId]!,
+        );
+        final candidateDistance = _distanceSquaredToRect(
+          pointer,
+          _noteRects[candidateId]!,
+        );
+        return candidateDistance < closestDistance ? candidateId : closestId;
+      });
+      final closestTargetRect = _noteRects[closestTargetId]!;
+      final layoutTop = _noteRects.values
+          .map((rect) => rect.top)
+          .reduce(math.min);
+      final desiredTop = math.max(
+        layoutTop,
+        pointer.dy < closestTargetRect.center.dy
+            ? closestTargetRect.top - sourceRect.height - 12
+            : closestTargetRect.bottom + 12,
+      );
+      reordered = _masonryOrderForPosition(
         orderIds: orderIds,
         sourceId: sourceId,
         pinnedById: _dragPinnedById,
         noteRects: _noteRects,
-        targetColumnAnchor: _noteRects[targetGroupIds.first]!,
-        targetColumnBottom: bottom,
+        targetColumnAnchor: targetColumnAnchor,
         pointer: pointer,
+        desiredTop: desiredTop,
       );
     }
 
@@ -722,14 +744,25 @@ bool _rectsShareColumn(Rect first, Rect second) {
   return overlap >= math.min(first.width, second.width) * 0.5;
 }
 
-List<String>? _masonryOrderForEmptySpace({
+List<Rect> _masonryColumnAnchors(Iterable<Rect> rects) {
+  final anchors = <Rect>[];
+  for (final rect in rects) {
+    if (!anchors.any((anchor) => _rectsShareColumn(rect, anchor))) {
+      anchors.add(rect);
+    }
+  }
+  anchors.sort((first, second) => first.left.compareTo(second.left));
+  return anchors;
+}
+
+List<String>? _masonryOrderForPosition({
   required List<String> orderIds,
   required String sourceId,
   required Map<String, bool> pinnedById,
   required Map<String, Rect> noteRects,
   required Rect targetColumnAnchor,
-  required double targetColumnBottom,
   required Offset pointer,
+  required double desiredTop,
 }) {
   final sourceRect = noteRects[sourceId];
   final sourcePinned = pinnedById[sourceId];
@@ -737,13 +770,7 @@ List<String>? _masonryOrderForEmptySpace({
     return null;
   }
 
-  final columnAnchors = <Rect>[];
-  for (final rect in noteRects.values) {
-    if (!columnAnchors.any((anchor) => _rectsShareColumn(rect, anchor))) {
-      columnAnchors.add(rect);
-    }
-  }
-  columnAnchors.sort((first, second) => first.left.compareTo(second.left));
+  final columnAnchors = _masonryColumnAnchors(noteRects.values);
   final targetColumn = columnAnchors.indexWhere(
     (anchor) => _rectsShareColumn(anchor, targetColumnAnchor),
   );
@@ -763,7 +790,6 @@ List<String>? _masonryOrderForEmptySpace({
   final firstInsertion = sameGroupIndexes.first;
   final lastInsertion = sameGroupIndexes.last + 1;
   final layoutTop = noteRects.values.map((rect) => rect.top).reduce(math.min);
-  final desiredTop = targetColumnBottom + 12;
   List<String>? bestOrder;
   double? bestPointerDistance;
   double? bestTopDistance;
@@ -794,9 +820,9 @@ List<String>? _masonryOrderForEmptySpace({
       final topDistance = (sourceTop - desiredTop).abs();
       final isBetter =
           bestOrder == null ||
-          pointerDistance < bestPointerDistance! ||
-          (pointerDistance == bestPointerDistance &&
-              topDistance < bestTopDistance!);
+          topDistance < bestTopDistance! ||
+          (topDistance == bestTopDistance &&
+              pointerDistance < bestPointerDistance!);
       if (isBetter) {
         bestOrder = List<String>.of(withoutSource)
           ..insert(insertionIndex, sourceId);

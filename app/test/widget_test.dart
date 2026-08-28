@@ -788,6 +788,125 @@ void main() {
     },
   );
 
+  testWidgets(
+    'grid drop targets an empty slot above a card in the pointed column',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.binding.setSurfaceSize(const Size(600, 900));
+      final database = LocalDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+      final repository = NotesRepository(
+        database,
+        moodAnalyzer: _ClearMoodAnalyzer(),
+      );
+      final sourceId = await repository.createTextNote(
+        title: 'Move upward on right',
+        body: '',
+      );
+      final firstRightId = await repository.createTextNote(
+        title: 'First right',
+        body: '',
+      );
+      final secondLeftId = await repository.createTextNote(
+        title: 'Second left',
+        body: '',
+      );
+      final lowerRightId = await repository.createTextNote(
+        title: 'Lower right',
+        body: '',
+      );
+      final thirdLeftId = await repository.createTextNote(
+        title: 'Third left',
+        body: '',
+      );
+      final thirdRightId = await repository.createTextNote(
+        title: 'Third right',
+        body: '',
+      );
+      await repository.reorderNotes([
+        sourceId,
+        firstRightId,
+        secondLeftId,
+        lowerRightId,
+        thirdLeftId,
+        thirdRightId,
+      ]);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localDatabaseProvider.overrideWithValue(database),
+            moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+            reminderSchedulerProvider.overrideWithValue(
+              _NoopReminderScheduler(),
+            ),
+            syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+            storedSessionProvider.overrideWith((ref) async => null),
+            backgroundStartupEnabledProvider.overrideWithValue(false),
+          ],
+          child: const RecallApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final sourceRect = tester.getRect(
+        find.byKey(ValueKey('note-position-$sourceId')),
+      );
+      final lowerRightRect = tester.getRect(
+        find.byKey(ValueKey('note-position-$lowerRightId')),
+      );
+      expect(
+        (sourceRect.center.dx - lowerRightRect.center.dx).abs(),
+        greaterThan(100),
+      );
+      expect(sourceRect.bottom, lessThan(lowerRightRect.top));
+      final target = Offset(lowerRightRect.center.dx, lowerRightRect.top - 4);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Move upward on right')),
+      );
+      await tester.pump(const Duration(milliseconds: 360));
+      await gesture.moveTo(target);
+      for (var frame = 0; frame < 36; frame++) {
+        await tester.pump(const Duration(milliseconds: 8));
+      }
+
+      final placeholderRect = tester.getRect(
+        find.byKey(ValueKey('note-drop-placeholder-$sourceId')),
+      );
+      expect(placeholderRect.center.dx, closeTo(lowerRightRect.center.dx, 1));
+      expect(placeholderRect.top, lessThan(lowerRightRect.top));
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      final savedSourceRect = tester.getRect(
+        find.byKey(ValueKey('note-position-$sourceId')),
+      );
+      final savedLowerRightRect = tester.getRect(
+        find.byKey(ValueKey('note-position-$lowerRightId')),
+      );
+      expect(
+        (await repository.watchNotePreviews().first).map((note) => note.id),
+        [
+          firstRightId,
+          sourceId,
+          secondLeftId,
+          lowerRightId,
+          thirdLeftId,
+          thirdRightId,
+        ],
+      );
+      expect(
+        savedSourceRect.center.dx,
+        closeTo(savedLowerRightRect.center.dx, 1),
+      );
+      expect(savedSourceRect.bottom, lessThan(savedLowerRightRect.top));
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 1));
+    },
+  );
+
   testWidgets('a card can be dropped into empty space before the first card', (
     tester,
   ) async {
