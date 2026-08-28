@@ -151,13 +151,18 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   final Map<String, GlobalKey<_NotePositionTransitionState>>
   _noteTransitionKeys = {};
   Map<String, Offset> _reorderStartPositions = const {};
+  Map<String, Offset> _reorderTargetPositions = const {};
   int _reorderAnimationGeneration = 0;
   String? _draggedNoteId;
   List<String>? _dragOrderIds;
   List<String>? _dragOriginalOrderIds;
+  List<String>? _pendingDragOrderIds;
   Set<String> _dragVisibleIds = const {};
   Map<String, bool> _dragPinnedById = const {};
   Offset? _dragGlobalPosition;
+  Offset? _pendingDragContentPosition;
+  Offset? _lastDragReorderContentPosition;
+  Timer? _dragPreviewTimer;
 
   @override
   void initState() {
@@ -183,6 +188,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dragPreviewTimer?.cancel();
     unawaited(_notificationOpenSubscription?.cancel());
     _searchController
       ..removeListener(_onSearchChanged)
@@ -401,6 +407,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                   delegate: SliverChildBuilderDelegate(
                     (context, index) => _NoteEntrance(
                       key: ValueKey(notes[index].id),
+                      animateOnMount: _draggedNoteId == null,
                       child: _NotePositionTransition(
                         key: _noteTransitionKeys.putIfAbsent(
                           notes[index].id,
@@ -409,6 +416,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                         noteId: notes[index].id,
                         generation: _reorderAnimationGeneration,
                         animateFrom: _reorderStartPositions[notes[index].id],
+                        animateTo: _reorderTargetPositions[notes[index].id],
                         onLayoutChanged: _recordNoteLayout,
                         child: _ReorderableNote(
                           note: notes[index],
@@ -435,6 +443,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                 key: ValueKey(notes[index].id),
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _NoteEntrance(
+                  animateOnMount: _draggedNoteId == null,
                   child: _NotePositionTransition(
                     key: _noteTransitionKeys.putIfAbsent(
                       notes[index].id,
@@ -443,6 +452,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                     noteId: notes[index].id,
                     generation: _reorderAnimationGeneration,
                     animateFrom: _reorderStartPositions[notes[index].id],
+                    animateTo: _reorderTargetPositions[notes[index].id],
                     onLayoutChanged: _recordNoteLayout,
                     child: _ReorderableNote(
                       note: notes[index],
@@ -469,8 +479,11 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       _draggedNoteId = sourceId;
       _dragOrderIds = orderIds;
       _dragOriginalOrderIds = List.of(orderIds);
+      _pendingDragOrderIds = null;
       _dragVisibleIds = orderIds.toSet();
       _dragPinnedById = {for (final note in visibleNotes) note.id: note.pinned};
+      _pendingDragContentPosition = null;
+      _lastDragReorderContentPosition = null;
     });
   }
 
@@ -604,25 +617,69 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       reordered.insert(targetIndex + (placeAfter ? 1 : 0), sourceId);
     }
     if (_sameOrder(reordered, orderIds)) {
+      _clearPendingDragPreview();
       return;
     }
+    final lastReorderPosition = _lastDragReorderContentPosition;
+    if (lastReorderPosition != null &&
+        (pointer - lastReorderPosition).distance < 28) {
+      return;
+    }
+    _stageDragPreview(sourceId, reordered, pointer);
+  }
 
-    _reorderStartPositions = Map.of(_notePositions);
-    _reorderAnimationGeneration++;
-    setState(() => _dragOrderIds = reordered);
+  void _stageDragPreview(
+    String sourceId,
+    List<String> reordered,
+    Offset contentPosition,
+  ) {
+    final pending = _pendingDragOrderIds;
+    if (pending != null && _sameOrder(pending, reordered)) {
+      _pendingDragContentPosition = contentPosition;
+      return;
+    }
+    _dragPreviewTimer?.cancel();
+    _pendingDragOrderIds = List.of(reordered);
+    _pendingDragContentPosition = contentPosition;
+    _dragPreviewTimer = Timer(const Duration(milliseconds: 140), () {
+      if (!mounted || _draggedNoteId != sourceId) {
+        return;
+      }
+      final nextOrder = _pendingDragOrderIds;
+      final nextPosition = _pendingDragContentPosition;
+      if (nextOrder == null || nextPosition == null) {
+        return;
+      }
+      _pendingDragOrderIds = null;
+      _pendingDragContentPosition = null;
+      _dragPreviewTimer = null;
+      _reorderStartPositions = Map.of(_notePositions);
+      _reorderTargetPositions = _predictNotePositions(nextOrder);
+      _reorderAnimationGeneration++;
+      _lastDragReorderContentPosition = nextPosition;
+      setState(() => _dragOrderIds = nextOrder);
+    });
+  }
+
+  void _clearPendingDragPreview() {
+    _dragPreviewTimer?.cancel();
+    _dragPreviewTimer = null;
+    _pendingDragOrderIds = null;
+    _pendingDragContentPosition = null;
   }
 
   Future<void> _commitNoteDrag(
     String sourceId,
     List<NotePreview> allNotes,
   ) async {
-    final orderIds = _dragOrderIds;
+    final orderIds = _pendingDragOrderIds ?? _dragOrderIds;
     final originalOrderIds = _dragOriginalOrderIds;
     if (_draggedNoteId != sourceId ||
         orderIds == null ||
         originalOrderIds == null) {
       return;
     }
+    _clearPendingDragPreview();
     if (_sameOrder(orderIds, originalOrderIds)) {
       _clearNoteDrag();
       return;
@@ -661,11 +718,16 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       return;
     }
     _reorderStartPositions = Map.of(_notePositions);
+    final originalOrder = _dragOriginalOrderIds;
+    _reorderTargetPositions = originalOrder == null
+        ? const {}
+        : _predictNotePositions(originalOrder);
     _reorderAnimationGeneration++;
     _clearNoteDrag();
   }
 
   void _clearNoteDrag() {
+    _clearPendingDragPreview();
     if (!mounted) {
       return;
     }
@@ -676,6 +738,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       _dragVisibleIds = const {};
       _dragPinnedById = const {};
       _dragGlobalPosition = null;
+      _lastDragReorderContentPosition = null;
     });
   }
 
@@ -699,6 +762,53 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
   void _recordNoteLayout(String noteId, Offset position, Size size) {
     _notePositions[noteId] = position;
     _noteRects[noteId] = position & size;
+  }
+
+  Map<String, Offset> _predictNotePositions(List<String> orderIds) {
+    final measuredIds = orderIds
+        .where((id) => _noteRects.containsKey(id))
+        .toList(growable: false);
+    if (measuredIds.isEmpty) {
+      return const {};
+    }
+    final layoutTop = measuredIds
+        .map((id) => _noteRects[id]!.top)
+        .reduce(math.min);
+    if (!_gridLayout) {
+      final left = measuredIds
+          .map((id) => _noteRects[id]!.left)
+          .reduce(math.min);
+      var top = layoutTop;
+      final positions = <String, Offset>{};
+      for (final id in measuredIds) {
+        positions[id] = Offset(left, top);
+        top += _noteRects[id]!.height + 12;
+      }
+      return positions;
+    }
+
+    final columnAnchors = _masonryColumnAnchors(
+      measuredIds.map((id) => _noteRects[id]!),
+    );
+    if (columnAnchors.isEmpty) {
+      return const {};
+    }
+    final columnOffsets = List<double>.filled(columnAnchors.length, layoutTop);
+    final positions = <String, Offset>{};
+    for (final id in measuredIds) {
+      var shortestColumn = 0;
+      for (var column = 1; column < columnOffsets.length; column++) {
+        if (columnOffsets[column] < columnOffsets[shortestColumn]) {
+          shortestColumn = column;
+        }
+      }
+      positions[id] = Offset(
+        columnAnchors[shortestColumn].left,
+        columnOffsets[shortestColumn],
+      );
+      columnOffsets[shortestColumn] += _noteRects[id]!.height + 12;
+    }
+    return positions;
   }
 }
 
@@ -1048,13 +1158,28 @@ class _LoadingNotesState extends State<_LoadingNotes>
   }
 }
 
-class _NoteEntrance extends StatelessWidget {
-  const _NoteEntrance({super.key, required this.child});
+class _NoteEntrance extends StatefulWidget {
+  const _NoteEntrance({
+    super.key,
+    required this.animateOnMount,
+    required this.child,
+  });
 
+  final bool animateOnMount;
   final Widget child;
 
   @override
+  State<_NoteEntrance> createState() => _NoteEntranceState();
+}
+
+class _NoteEntranceState extends State<_NoteEntrance> {
+  late final bool _animate = widget.animateOnMount;
+
+  @override
   Widget build(BuildContext context) {
+    if (!_animate) {
+      return widget.child;
+    }
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -1069,7 +1194,7 @@ class _NoteEntrance extends StatelessWidget {
           child: child,
         ),
       ),
-      child: child,
+      child: widget.child,
     );
   }
 }
@@ -1080,6 +1205,7 @@ class _NotePositionTransition extends StatefulWidget {
     required this.noteId,
     required this.generation,
     required this.animateFrom,
+    required this.animateTo,
     required this.onLayoutChanged,
     required this.child,
   });
@@ -1087,6 +1213,7 @@ class _NotePositionTransition extends StatefulWidget {
   final String noteId;
   final int generation;
   final Offset? animateFrom;
+  final Offset? animateTo;
   final void Function(String noteId, Offset position, Size size)
   onLayoutChanged;
   final Widget child;
@@ -1125,8 +1252,23 @@ class _NotePositionTransitionState extends State<_NotePositionTransition>
     }
     _handledGeneration = widget.generation;
     _controller.stop();
-    _pendingStart = widget.animateFrom;
-    _hideUntilMeasured = _pendingStart != null;
+    final start = widget.animateFrom;
+    final predictedEnd = widget.animateTo;
+    if (start != null && predictedEnd != null) {
+      final displacement = start - predictedEnd;
+      final reduceMotion = MediaQuery.disableAnimationsOf(context);
+      _pendingStart = null;
+      _hideUntilMeasured = false;
+      _beginOffset = reduceMotion ? Offset.zero : displacement;
+      if (reduceMotion || displacement.distanceSquared < 1) {
+        _controller.value = 1;
+      } else {
+        _controller.forward(from: 0);
+      }
+    } else {
+      _pendingStart = start;
+      _hideUntilMeasured = _pendingStart != null;
+    }
   }
 
   @override

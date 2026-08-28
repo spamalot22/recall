@@ -65,7 +65,12 @@ void main() {
       );
       expect(
         (await analyzer.analyze(title: '', body: 'the of and')).mood,
-        isNot(ColorMood.clear),
+        isIn({
+          ColorMood.calm,
+          ColorMood.reflective,
+          ColorMood.routine,
+          ColorMood.focus,
+        }),
       );
     },
   );

@@ -46,7 +46,7 @@ void main() {
         .write(
           const NotesCompanion(
             mood: Value('clear'),
-            moodModelVersion: Value(2),
+            moodModelVersion: Value(currentMoodModelVersion - 1),
           ),
         );
 
@@ -70,7 +70,7 @@ void main() {
           .write(
             const NotesCompanion(
               mood: Value('urgent'),
-              moodModelVersion: Value(2),
+              moodModelVersion: Value(currentMoodModelVersion - 1),
             ),
           );
 

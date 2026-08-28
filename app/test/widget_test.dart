@@ -460,6 +460,9 @@ void main() {
     await tester.pumpAndSettle();
 
     final source = tester.getCenter(find.text('Third'));
+    final initialSourceRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$thirdId')),
+    );
     final target = tester.getCenter(find.text('First')) + const Offset(0, 30);
     final originalOrder = (await repository.watchNotePreviews().first)
         .map((note) => note.id)
@@ -467,6 +470,11 @@ void main() {
     final gesture = await tester.startGesture(source);
     await tester.pump(const Duration(milliseconds: 360));
     await gesture.moveTo(target);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      tester.getRect(find.byKey(ValueKey('note-drop-placeholder-$thirdId'))),
+      initialSourceRect,
+    );
 
     var animatedTranslation = 0.0;
     for (var frame = 0; frame < 20; frame++) {
@@ -570,6 +578,16 @@ void main() {
       }
     }
     expect(animatedTranslation, greaterThan(1));
+    final visibleCardOpacities = tester
+        .widgetList<Opacity>(
+          find.ancestor(
+            of: find.text('Grid first'),
+            matching: find.byType(Opacity),
+          ),
+        )
+        .map((opacity) => opacity.opacity);
+    expect(visibleCardOpacities, isNotEmpty);
+    expect(visibleCardOpacities, everyElement(greaterThan(0.95)));
     expect(
       (await repository.watchNotePreviews().first).map((note) => note.id),
       originalOrder,
@@ -662,7 +680,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 360));
     await gesture.moveTo(target);
-    for (var frame = 0; frame < 36; frame++) {
+    for (var frame = 0; frame < 56; frame++) {
       await tester.pump(const Duration(milliseconds: 8));
     }
 
@@ -762,7 +780,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 360));
         await gesture.moveTo(target);
-        for (var frame = 0; frame < 36; frame++) {
+        for (var frame = 0; frame < 56; frame++) {
           await tester.pump(const Duration(milliseconds: 8));
         }
 
@@ -867,7 +885,7 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 360));
       await gesture.moveTo(target);
-      for (var frame = 0; frame < 36; frame++) {
+      for (var frame = 0; frame < 56; frame++) {
         await tester.pump(const Duration(milliseconds: 8));
       }
 

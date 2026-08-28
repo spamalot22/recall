@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'note_models.dart';
 import 'roberta_tokenizer.dart';
 
-const currentMoodModelVersion = 3;
+const currentMoodModelVersion = 4;
 const _emotionLabelCount = 28;
 const _fallbackModelAsset = 'assets/models/recall_goemotions_v1.bin';
 const _fallbackModelFormatVersion = 1;
@@ -285,9 +285,6 @@ class _FallbackEmotionModel {
     final grouped = <ColorMood, double>{};
     for (var index = 0; index < scores.length; index++) {
       final mood = _emotionMoods[_Emotion.values[index]]!;
-      if (mood == ColorMood.clear) {
-        continue;
-      }
       grouped[mood] = math.max(
         grouped[mood] ?? double.negativeInfinity,
         scores[index],
@@ -295,11 +292,26 @@ class _FallbackEmotionModel {
     }
     final ranked = grouped.entries.toList()
       ..sort((left, right) => right.value.compareTo(left.value));
-    final winner = ranked.first;
+    final strongest = ranked.first;
+    final strongestNonNeutral = ranked.firstWhere(
+      (candidate) => candidate.key != ColorMood.clear,
+    );
+    final confidence = _sigmoid(strongestNonNeutral.value);
+    final margin =
+        strongestNonNeutral.value -
+        ranked
+            .firstWhere((candidate) => candidate.key != strongestNonNeutral.key)
+            .value;
+    final confidentlyEmotional =
+        strongest.key == strongestNonNeutral.key &&
+        confidence >= 0.64 &&
+        margin >= 0.35;
 
     return MoodAnalysis(
-      mood: winner.key,
-      confidence: _sigmoid(winner.value),
+      mood: confidentlyEmotional
+          ? strongestNonNeutral.key
+          : _subduedMoodFor(strongestNonNeutral.key),
+      confidence: confidence,
       modelVersion: currentMoodModelVersion,
     );
   }
@@ -355,15 +367,24 @@ Set<int> _fallbackFeatures(String text) {
 
 ColorMood _stableFallbackMood(String text) {
   const moods = [
-    ColorMood.joyful,
-    ColorMood.warm,
     ColorMood.calm,
     ColorMood.reflective,
-    ColorMood.tense,
-    ColorMood.intense,
-    ColorMood.surprised,
+    ColorMood.routine,
+    ColorMood.focus,
   ];
   return moods[_fnv1a(utf8.encode(text)) % moods.length];
+}
+
+ColorMood _subduedMoodFor(ColorMood mood) {
+  return switch (mood) {
+    ColorMood.intense ||
+    ColorMood.tense ||
+    ColorMood.reflective => ColorMood.reflective,
+    ColorMood.joyful || ColorMood.warm || ColorMood.calm => ColorMood.calm,
+    ColorMood.surprised => ColorMood.focus,
+    ColorMood.clear => ColorMood.routine,
+    _ => mood,
+  };
 }
 
 int _fnv1a(List<int> bytes) {
