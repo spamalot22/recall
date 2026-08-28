@@ -122,6 +122,8 @@ ThemeData _buildTheme(ColorScheme scheme) {
 
 enum _NoteFilter { all, pinned, dueSoon, archive }
 
+const _noteSpacing = 12.0;
+
 extension on _NoteFilter {
   String get label => switch (this) {
     _NoteFilter.all => 'All',
@@ -399,8 +401,8 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
                   // moves; preserve card state while resetting the render
                   // object for each live reorder.
                   key: ValueKey((columns, _reorderAnimationGeneration)),
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
+                  mainAxisSpacing: _noteSpacing,
+                  crossAxisSpacing: _noteSpacing,
                   gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: columns,
                   ),
@@ -441,7 +443,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
               findChildIndexCallback: findNoteIndex,
               itemBuilder: (context, index) => Padding(
                 key: ValueKey(notes[index].id),
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: _noteSpacing),
                 child: _NoteEntrance(
                   animateOnMount: _draggedNoteId == null,
                   child: _NotePositionTransition(
@@ -515,6 +517,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     final firstGroupId = groupIds.first;
     final lastGroupId = groupIds.last;
     var targetGroupIds = measuredGroupIds;
+    var targetColumnHasNotes = false;
     Rect? targetColumnAnchor;
     if (_gridLayout) {
       final columnAnchors = _masonryColumnAnchors(_noteRects.values);
@@ -531,6 +534,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
             (id) => _rectsShareColumn(_noteRects[id]!, targetColumnAnchor!),
           )
           .toList();
+      targetColumnHasNotes = targetGroupIds.isNotEmpty;
       if (targetGroupIds.isEmpty) {
         targetGroupIds = measuredGroupIds;
       }
@@ -545,27 +549,17 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     List<String>? reordered;
     if (_gridLayout && targetColumnAnchor != null) {
       final sourceRect = _noteRects[sourceId]!;
-      final closestTargetId = targetGroupIds.reduce((closestId, candidateId) {
-        final closestDistance = _distanceSquaredToRect(
-          pointer,
-          _noteRects[closestId]!,
-        );
-        final candidateDistance = _distanceSquaredToRect(
-          pointer,
-          _noteRects[candidateId]!,
-        );
-        return candidateDistance < closestDistance ? candidateId : closestId;
-      });
-      final closestTargetRect = _noteRects[closestTargetId]!;
       final layoutTop = _noteRects.values
           .map((rect) => rect.top)
           .reduce(math.min);
-      final desiredTop = math.max(
-        layoutTop,
-        pointer.dy < closestTargetRect.center.dy
-            ? closestTargetRect.top - sourceRect.height - 12
-            : closestTargetRect.bottom + 12,
-      );
+      final desiredTop = targetColumnHasNotes
+          ? _masonryDropTopForPointer(
+              pointer: pointer,
+              columnIds: targetGroupIds,
+              noteRects: _noteRects,
+              sourceHeight: sourceRect.height,
+            )
+          : math.max(layoutTop, pointer.dy - sourceRect.height / 2);
       reordered = _masonryOrderForPosition(
         orderIds: orderIds,
         sourceId: sourceId,
@@ -782,7 +776,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       final positions = <String, Offset>{};
       for (final id in measuredIds) {
         positions[id] = Offset(left, top);
-        top += _noteRects[id]!.height + 12;
+        top += _noteRects[id]!.height + _noteSpacing;
       }
       return positions;
     }
@@ -806,7 +800,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
         columnAnchors[shortestColumn].left,
         columnOffsets[shortestColumn],
       );
-      columnOffsets[shortestColumn] += _noteRects[id]!.height + 12;
+      columnOffsets[shortestColumn] += _noteRects[id]!.height + _noteSpacing;
     }
     return positions;
   }
@@ -863,6 +857,32 @@ List<Rect> _masonryColumnAnchors(Iterable<Rect> rects) {
   }
   anchors.sort((first, second) => first.left.compareTo(second.left));
   return anchors;
+}
+
+double _masonryDropTopForPointer({
+  required Offset pointer,
+  required List<String> columnIds,
+  required Map<String, Rect> noteRects,
+  required double sourceHeight,
+}) {
+  final columnRects = columnIds.map((id) => noteRects[id]!).toList()
+    ..sort((first, second) => first.top.compareTo(second.top));
+  if (pointer.dy < columnRects.first.center.dy) {
+    return columnRects.first.top;
+  }
+  for (var index = 1; index < columnRects.length; index++) {
+    if (pointer.dy < columnRects[index].center.dy) {
+      final previous = columnRects[index - 1];
+      final next = columnRects[index];
+      final minimumTop = previous.bottom + _noteSpacing;
+      final maximumTop = next.top - sourceHeight - _noteSpacing;
+      if (maximumTop >= minimumTop) {
+        return (pointer.dy - sourceHeight / 2).clamp(minimumTop, maximumTop);
+      }
+      return minimumTop;
+    }
+  }
+  return columnRects.last.bottom + _noteSpacing;
 }
 
 List<String>? _masonryOrderForPosition({
@@ -949,7 +969,7 @@ List<String>? _masonryOrderForPosition({
       break;
     }
     columnOffsets[shortestColumn] =
-        columnOffsets[shortestColumn] + rect.height + 12;
+        columnOffsets[shortestColumn] + rect.height + _noteSpacing;
   }
 
   return bestOrder;
@@ -1587,7 +1607,11 @@ class _NoteCardState extends ConsumerState<NoteCard> {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: 56, maxHeight: widget.maxHeight),
+      constraints: BoxConstraints(
+        minWidth: double.infinity,
+        minHeight: 56,
+        maxHeight: widget.maxHeight,
+      ),
       child: AnimatedScale(
         scale: _pressed ? 0.985 : 1,
         duration: reduceMotion

@@ -382,7 +382,9 @@ void main() {
         ),
       );
       await tester.pump();
-      return tester.getSize(find.byType(NoteCard)).height;
+      final cardSize = tester.getSize(find.byType(NoteCard));
+      expect(cardSize.width, 220);
+      return cardSize.height;
     }
 
     final shortHeight = await cardHeight(shortNote);
@@ -601,6 +603,115 @@ void main() {
     expect(
       (await repository.watchNotePreviews().first).map((note) => note.id),
       [secondId, firstId, thirdId],
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('grid drop inserts between cards in the pointed column', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(600, 900));
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final repository = NotesRepository(
+      database,
+      moodAnalyzer: _ClearMoodAnalyzer(),
+    );
+    final firstLeftId = await repository.createTextNote(
+      title: 'First left',
+      body: '',
+    );
+    final firstRightId = await repository.createTextNote(
+      title: 'First right',
+      body: '',
+    );
+    final secondLeftId = await repository.createTextNote(
+      title: 'Second left',
+      body: '',
+    );
+    final secondRightId = await repository.createTextNote(
+      title: 'Second right',
+      body: '',
+    );
+    final sourceId = await repository.createTextNote(
+      title: 'Move between left cards',
+      body: '',
+    );
+    final thirdRightId = await repository.createTextNote(
+      title: 'Third right',
+      body: '',
+    );
+    await repository.reorderNotes([
+      firstLeftId,
+      firstRightId,
+      secondLeftId,
+      secondRightId,
+      sourceId,
+      thirdRightId,
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          localDatabaseProvider.overrideWithValue(database),
+          moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+          reminderSchedulerProvider.overrideWithValue(_NoopReminderScheduler()),
+          syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+          storedSessionProvider.overrideWith((ref) async => null),
+          backgroundStartupEnabledProvider.overrideWithValue(false),
+        ],
+        child: const RecallApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final firstLeftRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$firstLeftId')),
+    );
+    final secondLeftRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$secondLeftId')),
+    );
+    final firstRightRect = tester.getRect(
+      find.byKey(ValueKey('note-position-$firstRightId')),
+    );
+    expect(firstLeftRect.width, closeTo(firstRightRect.width, 0.01));
+    expect(secondLeftRect.center.dx, closeTo(firstLeftRect.center.dx, 1));
+    final target = Offset(
+      firstLeftRect.center.dx,
+      (firstLeftRect.bottom + secondLeftRect.top) / 2,
+    );
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('Move between left cards')),
+    );
+    await tester.pump(const Duration(milliseconds: 360));
+    await gesture.moveTo(target);
+    for (var frame = 0; frame < 56; frame++) {
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+
+    final placeholderRect = tester.getRect(
+      find.byKey(ValueKey('note-drop-placeholder-$sourceId')),
+    );
+    expect(placeholderRect.width, closeTo(firstLeftRect.width, 0.01));
+    expect(placeholderRect.center.dx, closeTo(firstLeftRect.center.dx, 1));
+    expect(placeholderRect.top, closeTo(secondLeftRect.top, 1));
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      (await repository.watchNotePreviews().first).map((note) => note.id),
+      [
+        firstLeftId,
+        firstRightId,
+        sourceId,
+        secondLeftId,
+        secondRightId,
+        thirdRightId,
+      ],
     );
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -893,32 +1004,26 @@ void main() {
         find.byKey(ValueKey('note-drop-placeholder-$sourceId')),
       );
       expect(placeholderRect.center.dx, closeTo(lowerRightRect.center.dx, 1));
-      expect(placeholderRect.top, lessThan(lowerRightRect.top));
+      expect(placeholderRect.top, lessThanOrEqualTo(lowerRightRect.top));
 
       await gesture.up();
       await tester.pumpAndSettle();
       final savedSourceRect = tester.getRect(
         find.byKey(ValueKey('note-position-$sourceId')),
       );
-      final savedLowerRightRect = tester.getRect(
-        find.byKey(ValueKey('note-position-$lowerRightId')),
-      );
       expect(
         (await repository.watchNotePreviews().first).map((note) => note.id),
         [
           firstRightId,
-          sourceId,
           secondLeftId,
           lowerRightId,
+          sourceId,
           thirdLeftId,
           thirdRightId,
         ],
       );
-      expect(
-        savedSourceRect.center.dx,
-        closeTo(savedLowerRightRect.center.dx, 1),
-      );
-      expect(savedSourceRect.bottom, lessThan(savedLowerRightRect.top));
+      expect(savedSourceRect.center.dx, closeTo(lowerRightRect.center.dx, 1));
+      expect(savedSourceRect.top, lessThanOrEqualTo(lowerRightRect.top));
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 1));
