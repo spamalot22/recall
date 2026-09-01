@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
@@ -67,7 +69,7 @@ class NotesRepository {
             pinned: note.isPinned,
             archived: note.isArchived,
             recurring: reminder?.repeats ?? false,
-            reminderAt: reminder?.nextFireAt,
+            reminderAt: _nextReminderOccurrence(reminder),
           ),
         );
       }
@@ -518,7 +520,7 @@ class NotesRepository {
           pinned: note.isPinned,
           archived: note.isArchived,
           recurring: reminder?.repeats ?? false,
-          reminderAt: reminder?.nextFireAt,
+          reminderAt: _nextReminderOccurrence(reminder),
         ),
       );
     }
@@ -588,6 +590,7 @@ class NotesRepository {
     return NoteReminder(
       nextFireAt: reminder.nextFireAt.toLocal(),
       recurrence: ReminderRecurrence.fromName(reminder.recurrenceKind),
+      recurrenceInterval: _decodeRecurrenceInterval(reminder.recurrenceJson),
       snoozeUntil: reminder.snoozeUntil?.toLocal(),
     );
   }
@@ -606,6 +609,7 @@ class NotesRepository {
             nextFireAt: reminder.nextFireAt.toUtc(),
             timezone: DateTime.now().timeZoneName,
             recurrenceKind: Value(reminder.recurrence.name),
+            recurrenceJson: Value(_encodeRecurrenceRule(reminder)),
             snoozeUntil: Value(reminder.snoozeUntil?.toUtc()),
             createdAt: now,
             updatedAt: now,
@@ -618,12 +622,49 @@ class NotesRepository {
       return 'No reminder';
     }
 
-    final date = _formatDateTime(reminder.nextFireAt);
+    final date = _formatDateTime(
+      _nextReminderOccurrence(reminder) ?? reminder.nextFireAt,
+    );
     if (!reminder.repeats) {
       return date;
     }
 
-    return '${reminder.recurrence.label} • $date';
+    return '${reminder.recurrence.intervalLabel(reminder.recurrenceInterval)} • $date';
+  }
+
+  DateTime? _nextReminderOccurrence(NoteReminder? reminder) {
+    if (reminder == null) {
+      return null;
+    }
+    if (!reminder.repeats) {
+      return reminder.nextFireAt;
+    }
+    return reminder.nextOccurrenceAfter(DateTime.now());
+  }
+
+  int _decodeRecurrenceInterval(String? encoded) {
+    if (encoded == null || encoded.isEmpty) {
+      return 1;
+    }
+    try {
+      final decoded = jsonDecode(encoded);
+      if (decoded is Map && decoded['version'] == 1) {
+        final interval = decoded['interval'];
+        if (interval is int && interval >= 1 && interval <= 999) {
+          return interval;
+        }
+      }
+    } on FormatException {
+      // Invalid optional recurrence metadata falls back to legacy behavior.
+    }
+    return 1;
+  }
+
+  String? _encodeRecurrenceRule(NoteReminder reminder) {
+    if (!reminder.repeats || reminder.recurrenceInterval == 1) {
+      return null;
+    }
+    return jsonEncode({'version': 1, 'interval': reminder.recurrenceInterval});
   }
 
   String _formatDateTime(DateTime dateTime) {

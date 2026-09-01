@@ -3328,6 +3328,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   final List<_ChecklistDraft> _checklistItems = [];
   DateTime? _reminderAt;
   ReminderRecurrence _recurrence = ReminderRecurrence.none;
+  int _recurrenceInterval = 1;
   ColorMood _mood = ColorMood.clear;
   bool _moodWasPicked = false;
   bool _pinned = false;
@@ -3345,6 +3346,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   bool _autosaveAgain = false;
   int _draftRevision = 0;
   int _persistedRevision = 0;
+  ({DateTime at, ReminderRecurrence recurrence, int interval})?
+  _quietReminderSchedule;
 
   bool get _editing => widget.noteId != null;
 
@@ -3410,6 +3413,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     setState(() {
       _reminderAt = note.reminder?.nextFireAt;
       _recurrence = note.reminder?.recurrence ?? ReminderRecurrence.none;
+      _recurrenceInterval = note.reminder?.recurrenceInterval ?? 1;
       _hadReminder = note.reminder != null;
       _mood = note.mood;
       _moodWasPicked = !note.moodIsAutomatic;
@@ -3881,6 +3885,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       context,
       initialAt: _reminderAt,
       initialRecurrence: _recurrence,
+      initialRecurrenceInterval: _recurrenceInterval,
     );
     if (selection == null || !mounted) {
       return;
@@ -3890,6 +3895,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       _recurrence = selection.at == null
           ? ReminderRecurrence.none
           : selection.recurrence;
+      _recurrenceInterval = selection.at == null
+          ? 1
+          : selection.recurrenceInterval;
     });
   }
 
@@ -3899,6 +3907,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     _updateDraft(() {
       _reminderAt = null;
       _recurrence = ReminderRecurrence.none;
+      _recurrenceInterval = 1;
     });
   }
 
@@ -4040,7 +4049,11 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
           : const <ChecklistItemDraft>[],
       reminder: _reminderAt == null
           ? null
-          : NoteReminder(nextFireAt: _reminderAt!, recurrence: _recurrence),
+          : NoteReminder(
+              nextFireAt: _reminderAt!,
+              recurrence: _recurrence,
+              recurrenceInterval: _recurrenceInterval,
+            ),
     );
   }
 
@@ -4082,13 +4095,24 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         if (_hadReminder) {
           await scheduler.cancelNoteReminder(noteId);
         }
-      } else {
+        _quietReminderSchedule = null;
+      } else if (_quietReminderSchedule !=
+          (
+            at: draft.reminder!.nextFireAt,
+            recurrence: draft.reminder!.recurrence,
+            interval: draft.reminder!.recurrenceInterval,
+          )) {
         await scheduler.scheduleNoteReminder(
           noteId: noteId,
           title: draft.title,
           body: draft.body,
           reminder: draft.reminder!,
           requestPermissions: false,
+        );
+        _quietReminderSchedule = (
+          at: draft.reminder!.nextFireAt,
+          recurrence: draft.reminder!.recurrence,
+          interval: draft.reminder!.recurrenceInterval,
         );
       }
       _hadReminder = draft.reminder != null;

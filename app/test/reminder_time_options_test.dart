@@ -123,6 +123,101 @@ void main() {
     expect(done, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('sheet returns an anchored custom monthly interval', (
+    tester,
+  ) async {
+    final now = DateTime(2026, 8, 30, 12);
+    ReminderEditorSelection? result;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                result = await showReminderEditor(
+                  context,
+                  initialAt: DateTime(2026, 8, 31, 22),
+                  initialRecurrence: ReminderRecurrence.none,
+                  nowProvider: () => now,
+                );
+              },
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Does not repeat'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Months').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Starts'), findsOneWidget);
+    expect(find.text('month'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Increase interval'));
+    await tester.pumpAndSettle();
+    expect(find.text('2'), findsOneWidget);
+
+    final done = find.widgetWithText(FilledButton, 'Done');
+    await tester.ensureVisible(done);
+    await tester.tap(done);
+    await tester.pumpAndSettle();
+
+    expect(result?.at, DateTime(2026, 8, 31, 22));
+    expect(result?.recurrence, ReminderRecurrence.monthly);
+    expect(result?.recurrenceInterval, 2);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a recurring reminder preserves a start date in the past', (
+    tester,
+  ) async {
+    final now = DateTime(2026, 8, 30, 12);
+    final anchor = DateTime(2026, 8, 1, 9);
+    ReminderEditorSelection? result;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                result = await showReminderEditor(
+                  context,
+                  initialAt: anchor,
+                  initialRecurrence: ReminderRecurrence.daily,
+                  initialRecurrenceInterval: 2,
+                  nowProvider: () => now,
+                );
+              },
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Starts'), findsOneWidget);
+    expect(find.textContaining('Morning'), findsOneWidget);
+    expect(find.text('Choose a future time for this reminder.'), findsNothing);
+
+    final done = find.widgetWithText(FilledButton, 'Done');
+    await tester.ensureVisible(done);
+    await tester.tap(done);
+    await tester.pumpAndSettle();
+
+    expect(result?.at, anchor);
+    expect(result?.recurrence, ReminderRecurrence.daily);
+    expect(result?.recurrenceInterval, 2);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 List<String> _labels(List<ReminderTimePreset> presets) {

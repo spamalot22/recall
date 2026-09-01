@@ -84,6 +84,7 @@ class ReminderScheduler {
   static const _channelId = 'recall_reminders';
   static const _channelName = 'Reminders';
   static const _channelDescription = 'Recall note reminders';
+  static const _customOccurrenceWindow = 24;
 
   final FlutterLocalNotificationsPlugin _notifications;
   final MethodChannel _deviceChannel;
@@ -107,7 +108,8 @@ class ReminderScheduler {
   }) async {
     await _ensureInitialized();
 
-    if (!reminder.repeats && !reminder.nextFireAt.isAfter(DateTime.now())) {
+    final now = DateTime.now();
+    if (!reminder.repeats && !reminder.nextFireAt.isAfter(now)) {
       await cancelNoteReminder(noteId);
       return;
     }
@@ -116,21 +118,46 @@ class ReminderScheduler {
     final notificationTitle = _notificationTitle(title);
     final notificationBody = _notificationBody(body);
     final details = _notificationDetails(body);
-    final scheduledDate = _toScheduledDate(reminder.nextFireAt);
-    final matchComponents = _matchComponentsFor(reminder.recurrence);
     final scheduleMode = await _androidScheduleMode(
       requestPermissions: requestPermissions,
     );
 
     await _notifications.cancel(id: id);
+    await _cancelCustomOccurrences(noteId);
+    if (_usesRollingOccurrences(reminder)) {
+      final occurrences = reminderOccurrencesAfter(
+        reminder,
+        after: now,
+        count: _customOccurrenceWindow,
+      );
+      for (var index = 0; index < occurrences.length; index++) {
+        await _zonedScheduleWithFallback(
+          id: customOccurrenceNotificationIdForNote(noteId, index),
+          title: notificationTitle,
+          body: notificationBody,
+          scheduledDate: _toScheduledDate(occurrences[index]),
+          notificationDetails: details,
+          scheduleMode: scheduleMode,
+          payload: noteId,
+        );
+      }
+      return;
+    }
+
+    final scheduledAt = reminder.repeats
+        ? reminder.nextOccurrenceAfter(now)
+        : reminder.nextFireAt;
+    if (scheduledAt == null) {
+      return;
+    }
     await _zonedScheduleWithFallback(
       id: id,
       title: notificationTitle,
       body: notificationBody,
-      scheduledDate: scheduledDate,
+      scheduledDate: _toScheduledDate(scheduledAt),
       notificationDetails: details,
       scheduleMode: scheduleMode,
-      matchDateTimeComponents: matchComponents,
+      matchDateTimeComponents: _matchComponentsFor(reminder.recurrence),
       payload: noteId,
     );
   }
@@ -138,6 +165,7 @@ class ReminderScheduler {
   Future<void> cancelNoteReminder(String noteId) async {
     await _ensureInitialized();
     await _notifications.cancel(id: notificationIdForNote(noteId));
+    await _cancelCustomOccurrences(noteId);
     await cancelSnooze(noteId);
   }
 
@@ -176,10 +204,17 @@ class ReminderScheduler {
     bool requestPermissions = true,
   }) async {
     await _ensureInitialized();
-    final desiredIds = schedules
-        .map((schedule) => notificationIdForNote(schedule.noteId))
-        .toSet();
+    final desiredIds = <int>{};
     for (final schedule in schedules) {
+      if (_usesRollingOccurrences(schedule.reminder)) {
+        for (var index = 0; index < _customOccurrenceWindow; index++) {
+          desiredIds.add(
+            customOccurrenceNotificationIdForNote(schedule.noteId, index),
+          );
+        }
+      } else {
+        desiredIds.add(notificationIdForNote(schedule.noteId));
+      }
       final snoozeUntil = schedule.reminder.snoozeUntil;
       if (snoozeUntil != null && snoozeUntil.isAfter(DateTime.now())) {
         desiredIds.add(snoozeNotificationIdForNote(schedule.noteId));
@@ -216,6 +251,28 @@ class ReminderScheduler {
 
   int snoozeNotificationIdForNote(String noteId) {
     return notificationIdForNote('snooze:$noteId');
+  }
+
+  int customOccurrenceNotificationIdForNote(String noteId, int slot) {
+    if (slot < 0 || slot >= _customOccurrenceWindow) {
+      throw RangeError.range(slot, 0, _customOccurrenceWindow - 1, 'slot');
+    }
+    return notificationIdForNote('repeat:$slot:$noteId');
+  }
+
+  Future<void> _cancelCustomOccurrences(String noteId) async {
+    for (var index = 0; index < _customOccurrenceWindow; index++) {
+      await _notifications.cancel(
+        id: customOccurrenceNotificationIdForNote(noteId, index),
+      );
+    }
+  }
+
+  bool _usesRollingOccurrences(NoteReminder reminder) {
+    return reminder.repeats &&
+        (reminder.recurrenceInterval > 1 ||
+            reminder.recurrence == ReminderRecurrence.monthly ||
+            reminder.recurrence == ReminderRecurrence.yearly);
   }
 
   Future<void> _ensureInitialized() {

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recall_app/src/notes/note_models.dart';
 import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 
 void main() {
@@ -57,6 +58,125 @@ void main() {
     expect(
       File('android/app/src/main/res/raw/keep.xml').readAsStringSync(),
       contains('@drawable/$iconName'),
+    );
+  });
+
+  test('schedules a rolling set of alarms for custom intervals', () async {
+    AndroidFlutterLocalNotificationsPlugin.registerWith();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    const notificationsChannel = MethodChannel(
+      'dexterous.com/flutter/local_notifications',
+    );
+    const deviceChannel = MethodChannel('app.recall.notes/device');
+    final calls = <MethodCall>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(notificationsChannel, (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'initialize' => true,
+        'getNotificationAppLaunchDetails' => null,
+        'canScheduleExactNotifications' => true,
+        _ => null,
+      };
+    });
+    messenger.setMockMethodCallHandler(
+      deviceChannel,
+      (call) async => call.method == 'localTimezone' ? 'UTC' : null,
+    );
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(notificationsChannel, null);
+      messenger.setMockMethodCallHandler(deviceChannel, null);
+    });
+
+    final scheduler = ReminderScheduler();
+    addTearDown(scheduler.dispose);
+    final start = DateTime.now().add(const Duration(days: 1));
+    await scheduler.scheduleNoteReminder(
+      noteId: 'custom-interval-note',
+      title: 'Water plants',
+      body: 'Check the soil first',
+      reminder: NoteReminder(
+        nextFireAt: start,
+        recurrence: ReminderRecurrence.daily,
+        recurrenceInterval: 2,
+      ),
+      requestPermissions: false,
+    );
+
+    final scheduled = calls
+        .where((call) => call.method == 'zonedSchedule')
+        .toList();
+    expect(scheduled, hasLength(24));
+    expect(
+      scheduled
+          .map((call) => (call.arguments as Map<Object?, Object?>)['id'])
+          .toSet(),
+      hasLength(24),
+    );
+    expect(
+      scheduled.every(
+        (call) => !(call.arguments as Map<Object?, Object?>).containsKey(
+          'matchDateTimeComponents',
+        ),
+      ),
+      isTrue,
+    );
+  });
+
+  test('uses rolling alarms for last-day monthly recurrence', () async {
+    AndroidFlutterLocalNotificationsPlugin.registerWith();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    const notificationsChannel = MethodChannel(
+      'dexterous.com/flutter/local_notifications',
+    );
+    const deviceChannel = MethodChannel('app.recall.notes/device');
+    final calls = <MethodCall>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(notificationsChannel, (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'initialize' => true,
+        'getNotificationAppLaunchDetails' => null,
+        'canScheduleExactNotifications' => true,
+        _ => null,
+      };
+    });
+    messenger.setMockMethodCallHandler(
+      deviceChannel,
+      (call) async => call.method == 'localTimezone' ? 'UTC' : null,
+    );
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(notificationsChannel, null);
+      messenger.setMockMethodCallHandler(deviceChannel, null);
+    });
+
+    final scheduler = ReminderScheduler();
+    addTearDown(scheduler.dispose);
+    final now = DateTime.now();
+    await scheduler.scheduleNoteReminder(
+      noteId: 'monthly-last-day-note',
+      title: 'Month end',
+      body: '',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(now.year, now.month + 1, 0, 22),
+        recurrence: ReminderRecurrence.monthly,
+      ),
+      requestPermissions: false,
+    );
+
+    expect(
+      calls.where((call) => call.method == 'zonedSchedule'),
+      hasLength(24),
     );
   });
 

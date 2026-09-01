@@ -55,14 +55,20 @@ class NoteReminder {
   const NoteReminder({
     required this.nextFireAt,
     required this.recurrence,
+    this.recurrenceInterval = 1,
     this.snoozeUntil,
-  });
+  }) : assert(recurrenceInterval >= 1 && recurrenceInterval <= 999);
 
   final DateTime nextFireAt;
   final ReminderRecurrence recurrence;
+  final int recurrenceInterval;
   final DateTime? snoozeUntil;
 
   bool get repeats => recurrence != ReminderRecurrence.none;
+
+  DateTime? nextOccurrenceAfter(DateTime after) {
+    return reminderOccurrencesAfter(this, after: after, count: 1).firstOrNull;
+  }
 }
 
 class ScheduledNoteReminder {
@@ -96,12 +102,154 @@ enum ReminderRecurrence {
     };
   }
 
+  String unitLabel(int interval) {
+    final plural = interval != 1;
+    return switch (this) {
+      ReminderRecurrence.none => 'time',
+      ReminderRecurrence.daily => plural ? 'days' : 'day',
+      ReminderRecurrence.weekly => plural ? 'weeks' : 'week',
+      ReminderRecurrence.monthly => plural ? 'months' : 'month',
+      ReminderRecurrence.yearly => plural ? 'years' : 'year',
+    };
+  }
+
+  String intervalLabel(int interval) {
+    if (this == ReminderRecurrence.none) {
+      return 'Once';
+    }
+    if (interval == 1) {
+      return label;
+    }
+    return 'Every $interval ${unitLabel(interval)}';
+  }
+
   static ReminderRecurrence fromName(String name) {
     return ReminderRecurrence.values.firstWhere(
       (recurrence) => recurrence.name == name,
       orElse: () => ReminderRecurrence.none,
     );
   }
+}
+
+List<DateTime> reminderOccurrencesAfter(
+  NoteReminder reminder, {
+  required DateTime after,
+  required int count,
+}) {
+  if (count <= 0) {
+    return const [];
+  }
+  if (!reminder.repeats) {
+    return reminder.nextFireAt.isAfter(after)
+        ? [reminder.nextFireAt]
+        : const [];
+  }
+
+  final firstIndex = _firstReminderOccurrenceIndex(reminder, after);
+  return [
+    for (var offset = 0; offset < count; offset++)
+      _reminderOccurrenceAt(reminder, firstIndex + offset),
+  ];
+}
+
+int _firstReminderOccurrenceIndex(NoteReminder reminder, DateTime after) {
+  final anchor = reminder.nextFireAt;
+  if (anchor.isAfter(after)) {
+    return 0;
+  }
+
+  final interval = reminder.recurrenceInterval;
+  var index = switch (reminder.recurrence) {
+    ReminderRecurrence.none => 0,
+    ReminderRecurrence.daily =>
+      _calendarDayDifference(anchor, after) ~/ interval,
+    ReminderRecurrence.weekly =>
+      _calendarDayDifference(anchor, after) ~/ (interval * 7),
+    ReminderRecurrence.monthly => _monthDifference(anchor, after) ~/ interval,
+    ReminderRecurrence.yearly => (after.year - anchor.year) ~/ interval,
+  };
+  if (index < 0) {
+    index = 0;
+  }
+  while (!_reminderOccurrenceAt(reminder, index).isAfter(after)) {
+    index++;
+  }
+  return index;
+}
+
+DateTime _reminderOccurrenceAt(NoteReminder reminder, int index) {
+  final anchor = reminder.nextFireAt;
+  final interval = reminder.recurrenceInterval;
+  return switch (reminder.recurrence) {
+    ReminderRecurrence.none => anchor,
+    ReminderRecurrence.daily => _dateTimeLike(
+      anchor,
+      anchor.year,
+      anchor.month,
+      anchor.day + (index * interval),
+    ),
+    ReminderRecurrence.weekly => _dateTimeLike(
+      anchor,
+      anchor.year,
+      anchor.month,
+      anchor.day + (index * interval * 7),
+    ),
+    ReminderRecurrence.monthly => _monthlyOccurrence(anchor, index * interval),
+    ReminderRecurrence.yearly => _yearlyOccurrence(anchor, index * interval),
+  };
+}
+
+DateTime _monthlyOccurrence(DateTime anchor, int monthOffset) {
+  final zeroBasedMonth = anchor.month - 1 + monthOffset;
+  final year = anchor.year + zeroBasedMonth ~/ 12;
+  final month = zeroBasedMonth % 12 + 1;
+  final day = anchor.day.clamp(1, _daysInMonth(year, month)).toInt();
+  return _dateTimeLike(anchor, year, month, day);
+}
+
+DateTime _yearlyOccurrence(DateTime anchor, int yearOffset) {
+  final year = anchor.year + yearOffset;
+  final day = anchor.day.clamp(1, _daysInMonth(year, anchor.month)).toInt();
+  return _dateTimeLike(anchor, year, anchor.month, day);
+}
+
+DateTime _dateTimeLike(DateTime anchor, int year, int month, int day) {
+  if (anchor.isUtc) {
+    return DateTime.utc(
+      year,
+      month,
+      day,
+      anchor.hour,
+      anchor.minute,
+      anchor.second,
+      anchor.millisecond,
+      anchor.microsecond,
+    );
+  }
+  return DateTime(
+    year,
+    month,
+    day,
+    anchor.hour,
+    anchor.minute,
+    anchor.second,
+    anchor.millisecond,
+    anchor.microsecond,
+  );
+}
+
+int _calendarDayDifference(DateTime start, DateTime end) {
+  final startDay = DateTime.utc(start.year, start.month, start.day);
+  final endDay = DateTime.utc(end.year, end.month, end.day);
+  return endDay.difference(startDay).inDays;
+}
+
+int _monthDifference(DateTime start, DateTime end) {
+  return (end.year - start.year) * 12 + end.month - start.month;
+}
+
+int _daysInMonth(int year, int month) {
+  return DateTime.utc(year, month + 1, 0).day;
 }
 
 class ChecklistItemPreview {

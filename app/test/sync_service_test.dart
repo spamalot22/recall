@@ -63,6 +63,20 @@ void main() {
             updatedAt: now,
           ),
         );
+    await database
+        .into(database.reminders)
+        .insert(
+          RemindersCompanion.insert(
+            id: '0198a3b4-8e80-7000-8000-000000000002',
+            noteId: '0198a3b4-8e80-7000-8000-000000000001',
+            nextFireAt: DateTime.utc(2026, 8, 31, 22),
+            timezone: 'UTC',
+            recurrenceKind: const Value('monthly'),
+            recurrenceJson: const Value('{"version":1,"interval":2}'),
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
 
     await SyncService(
       database,
@@ -75,7 +89,10 @@ void main() {
       masterKey: session.masterKey,
     );
     final note = Map<String, Object?>.from(payload['note']! as Map);
+    final reminder = Map<String, Object?>.from(payload['reminder']! as Map);
     expect(note['sortOrder'], 7);
+    expect(reminder['recurrenceKind'], 'monthly');
+    expect(reminder['recurrenceJson'], '{"version":1,"interval":2}');
   });
 
   test(

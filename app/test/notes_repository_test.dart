@@ -234,6 +234,30 @@ void main() {
     },
   );
 
+  test(
+    'persists custom recurrence intervals in existing reminder metadata',
+    () async {
+      final noteId = await repository.createTextNote(
+        title: 'Replace filter',
+        body: 'Order the replacement cartridge',
+        reminder: NoteReminder(
+          nextFireAt: DateTime(2026, 8, 31, 22),
+          recurrence: ReminderRecurrence.monthly,
+          recurrenceInterval: 2,
+        ),
+      );
+
+      final loaded = await repository.loadNoteForEditing(noteId);
+      final stored = await database.select(database.reminders).getSingle();
+      final preview = await repository.watchNotePreviews().first;
+
+      expect(loaded?.reminder?.recurrence, ReminderRecurrence.monthly);
+      expect(loaded?.reminder?.recurrenceInterval, 2);
+      expect(stored.recurrenceJson, '{"version":1,"interval":2}');
+      expect(preview.single.reminderLabel, contains('Every 2 months'));
+    },
+  );
+
   test('loads and updates editable note content and reminder', () async {
     final noteId = await repository.createTextNote(
       title: 'Draft',

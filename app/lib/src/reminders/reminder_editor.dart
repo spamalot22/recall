@@ -1,19 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../notes/note_models.dart';
 import 'reminder_time_options.dart';
 
 class ReminderEditorSelection {
-  const ReminderEditorSelection(this.at, this.recurrence);
+  const ReminderEditorSelection(
+    this.at,
+    this.recurrence, {
+    this.recurrenceInterval = 1,
+  });
 
   final DateTime? at;
   final ReminderRecurrence recurrence;
+  final int recurrenceInterval;
 }
 
 Future<ReminderEditorSelection?> showReminderEditor(
   BuildContext context, {
   required DateTime? initialAt,
   required ReminderRecurrence initialRecurrence,
+  int initialRecurrenceInterval = 1,
   DateTime Function()? nowProvider,
 }) {
   final currentTime = nowProvider ?? DateTime.now;
@@ -21,6 +28,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
   var selectedDate = reminderDateOnly(initialSelection);
   var selectedTime = TimeOfDay.fromDateTime(initialSelection);
   var recurrence = initialRecurrence;
+  var recurrenceInterval = initialRecurrenceInterval.clamp(1, 999).toInt();
 
   return showModalBottomSheet<ReminderEditorSelection>(
     context: context,
@@ -35,11 +43,11 @@ Future<ReminderEditorSelection?> showReminderEditor(
           selectedDate,
           selectedTime,
         );
-        final availablePresets = availableReminderTimePresets(
-          selectedDate: selectedDate,
-          now: now,
-        );
-        final isValid = selectedAt.isAfter(now);
+        final availablePresets = recurrence == ReminderRecurrence.none
+            ? availableReminderTimePresets(selectedDate: selectedDate, now: now)
+            : reminderTimePresets;
+        final isValid =
+            recurrence != ReminderRecurrence.none || selectedAt.isAfter(now);
         final theme = Theme.of(sheetContext);
         final localizations = MaterialLocalizations.of(sheetContext);
         final textTheme = theme.textTheme;
@@ -51,11 +59,13 @@ Future<ReminderEditorSelection?> showReminderEditor(
           final selectionNow = currentTime();
           setSheetState(() {
             selectedDate = reminderDateOnly(date);
-            selectedTime = validReminderTimeForDate(
-              selectedDate: selectedDate,
-              preferredTime: selectedTime,
-              now: selectionNow,
-            );
+            if (recurrence == ReminderRecurrence.none) {
+              selectedTime = validReminderTimeForDate(
+                selectedDate: selectedDate,
+                preferredTime: selectedTime,
+                now: selectionNow,
+              );
+            }
           });
         }
 
@@ -77,7 +87,12 @@ Future<ReminderEditorSelection?> showReminderEditor(
                   const SizedBox(height: 20),
                   Row(
                     children: [
-                      Text('Date', style: textTheme.titleMedium),
+                      Text(
+                        recurrence == ReminderRecurrence.none
+                            ? 'Date'
+                            : 'Starts',
+                        style: textTheme.titleMedium,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -98,7 +113,9 @@ Future<ReminderEditorSelection?> showReminderEditor(
                         avatar: const Icon(Icons.today_outlined, size: 18),
                         label: const Text('Today'),
                         selected: isSameReminderDate(selectedDate, today),
-                        onSelected: canScheduleReminderOnDate(today, now)
+                        onSelected:
+                            (recurrence != ReminderRecurrence.none ||
+                                canScheduleReminderOnDate(today, now))
                             ? (_) => selectDate(today)
                             : null,
                       ),
@@ -205,6 +222,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
                   const SizedBox(height: 20),
                   DropdownButtonFormField<ReminderRecurrence>(
                     initialValue: recurrence,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Repeat',
                       prefixIcon: Icon(Icons.event_repeat_rounded),
@@ -213,14 +231,83 @@ Future<ReminderEditorSelection?> showReminderEditor(
                       for (final value in ReminderRecurrence.values)
                         DropdownMenuItem(
                           value: value,
-                          child: Text(value.label),
+                          child: Text(
+                            _repeatOptionLabel(value),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: (value) {
                       if (value != null) {
-                        setSheetState(() => recurrence = value);
+                        setSheetState(() {
+                          recurrence = value;
+                          if (value == ReminderRecurrence.none) {
+                            recurrenceInterval = 1;
+                          }
+                        });
                       }
                     },
+                  ),
+                  AnimatedSize(
+                    duration: selectionMotion,
+                    curve: Curves.easeOutCubic,
+                    child: recurrence == ReminderRecurrence.none
+                        ? const SizedBox(width: double.infinity)
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 16),
+                            child: InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: 'Interval',
+                                prefixIcon: Icon(Icons.repeat_rounded),
+                              ),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Decrease interval',
+                                    onPressed: recurrenceInterval > 1
+                                        ? () => setSheetState(
+                                            () => recurrenceInterval--,
+                                          )
+                                        : null,
+                                    icon: const Icon(Icons.remove_rounded),
+                                  ),
+                                  TextButton(
+                                    onPressed: () async {
+                                      final selected =
+                                          await _pickRecurrenceInterval(
+                                            sheetContext,
+                                            recurrenceInterval,
+                                          );
+                                      if (selected != null &&
+                                          sheetContext.mounted) {
+                                        setSheetState(
+                                          () => recurrenceInterval = selected,
+                                        );
+                                      }
+                                    },
+                                    child: Text('$recurrenceInterval'),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Increase interval',
+                                    onPressed: recurrenceInterval < 999
+                                        ? () => setSheetState(
+                                            () => recurrenceInterval++,
+                                          )
+                                        : null,
+                                    icon: const Icon(Icons.add_rounded),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      recurrence.unitLabel(recurrenceInterval),
+                                      style: textTheme.bodyLarge,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                   ),
                   const SizedBox(height: 20),
                   Row(
@@ -240,7 +327,11 @@ Future<ReminderEditorSelection?> showReminderEditor(
                       FilledButton.icon(
                         onPressed: isValid
                             ? () => Navigator.of(sheetContext).pop(
-                                ReminderEditorSelection(selectedAt, recurrence),
+                                ReminderEditorSelection(
+                                  selectedAt,
+                                  recurrence,
+                                  recurrenceInterval: recurrenceInterval,
+                                ),
                               )
                             : null,
                         icon: const Icon(Icons.check_rounded),
@@ -256,6 +347,73 @@ Future<ReminderEditorSelection?> showReminderEditor(
       },
     ),
   );
+}
+
+String _repeatOptionLabel(ReminderRecurrence recurrence) {
+  return switch (recurrence) {
+    ReminderRecurrence.none => 'Does not repeat',
+    ReminderRecurrence.daily => 'Days',
+    ReminderRecurrence.weekly => 'Weeks',
+    ReminderRecurrence.monthly => 'Months',
+    ReminderRecurrence.yearly => 'Years',
+  };
+}
+
+Future<int?> _pickRecurrenceInterval(
+  BuildContext context,
+  int initialValue,
+) async {
+  final formKey = GlobalKey<FormState>();
+  final controller = TextEditingController(text: '$initialValue');
+  try {
+    return await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Repeat interval'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(3),
+            ],
+            decoration: const InputDecoration(labelText: 'Every'),
+            validator: (value) {
+              final interval = int.tryParse(value ?? '');
+              if (interval == null || interval < 1 || interval > 999) {
+                return 'Enter a number from 1 to 999.';
+              }
+              return null;
+            },
+            onFieldSubmitted: (_) {
+              if (formKey.currentState?.validate() ?? false) {
+                Navigator.of(dialogContext).pop(int.parse(controller.text));
+              }
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() ?? false) {
+                Navigator.of(dialogContext).pop(int.parse(controller.text));
+              }
+            },
+            child: const Text('Set'),
+          ),
+        ],
+      ),
+    );
+  } finally {
+    controller.dispose();
+  }
 }
 
 Future<DateTime?> _pickReminderDate(
