@@ -56,18 +56,95 @@ class NoteReminder {
     required this.nextFireAt,
     required this.recurrence,
     this.recurrenceInterval = 1,
+    this.cycle,
     this.snoozeUntil,
-  }) : assert(recurrenceInterval >= 1 && recurrenceInterval <= 999);
+  }) : assert(recurrenceInterval >= 1 && recurrenceInterval <= 999),
+       assert(cycle == null || recurrence != ReminderRecurrence.none);
 
   final DateTime nextFireAt;
   final ReminderRecurrence recurrence;
   final int recurrenceInterval;
+  final ReminderCycle? cycle;
   final DateTime? snoozeUntil;
 
   bool get repeats => recurrence != ReminderRecurrence.none;
 
   DateTime? nextOccurrenceAfter(DateTime after) {
     return reminderOccurrencesAfter(this, after: after, count: 1).firstOrNull;
+  }
+}
+
+class ReminderCycle {
+  const ReminderCycle({
+    required this.activeDuration,
+    required this.restDuration,
+    this.endAt,
+    this.maxCycles,
+  }) : assert(maxCycles == null || (maxCycles >= 1 && maxCycles <= 999)),
+       assert(endAt == null || maxCycles == null);
+
+  final ReminderDuration activeDuration;
+  final ReminderDuration restDuration;
+  final DateTime? endAt;
+  final int? maxCycles;
+
+  String get label => '${activeDuration.label} on / ${restDuration.label} off';
+
+  @override
+  bool operator ==(Object other) {
+    return other is ReminderCycle &&
+        other.activeDuration == activeDuration &&
+        other.restDuration == restDuration &&
+        other.endAt == endAt &&
+        other.maxCycles == maxCycles;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(activeDuration, restDuration, endAt, maxCycles);
+}
+
+class ReminderDuration {
+  const ReminderDuration({required this.value, required this.unit})
+    : assert(value >= 1 && value <= 999);
+
+  final int value;
+  final ReminderDurationUnit unit;
+
+  String get label => '$value ${unit.unitLabel(value)}';
+
+  @override
+  bool operator ==(Object other) {
+    return other is ReminderDuration &&
+        other.value == value &&
+        other.unit == unit;
+  }
+
+  @override
+  int get hashCode => Object.hash(value, unit);
+}
+
+enum ReminderDurationUnit {
+  days,
+  weeks,
+  months;
+
+  String unitLabel(int value) {
+    final singular = value == 1;
+    return switch (this) {
+      ReminderDurationUnit.days => singular ? 'day' : 'days',
+      ReminderDurationUnit.weeks => singular ? 'week' : 'weeks',
+      ReminderDurationUnit.months => singular ? 'month' : 'months',
+    };
+  }
+
+  static ReminderDurationUnit? tryFromName(String name) {
+    for (final unit in values) {
+      if (unit.name == name) {
+        return unit;
+      }
+    }
+    return null;
   }
 }
 
@@ -145,6 +222,16 @@ List<DateTime> reminderOccurrencesAfter(
         : const [];
   }
 
+  final cycle = reminder.cycle;
+  if (cycle != null) {
+    return _cycledReminderOccurrencesAfter(
+      reminder,
+      cycle,
+      after: after,
+      count: count,
+    );
+  }
+
   final firstIndex = _firstReminderOccurrenceIndex(reminder, after);
   return [
     for (var offset = 0; offset < count; offset++)
@@ -152,7 +239,71 @@ List<DateTime> reminderOccurrencesAfter(
   ];
 }
 
-int _firstReminderOccurrenceIndex(NoteReminder reminder, DateTime after) {
+List<DateTime> _cycledReminderOccurrencesAfter(
+  NoteReminder reminder,
+  ReminderCycle cycle, {
+  required DateTime after,
+  required int count,
+}) {
+  final occurrences = <DateTime>[];
+  var cycleStart = _ScheduleCursor(
+    reminder.nextFireAt,
+    reminder.nextFireAt.day,
+  );
+  var cycleIndex = 0;
+
+  while (occurrences.length < count) {
+    if (cycle.maxCycles case final maxCycles? when cycleIndex >= maxCycles) {
+      break;
+    }
+    if (cycle.endAt case final endAt? when cycleStart.at.isAfter(endAt)) {
+      break;
+    }
+
+    final activeEnd = cycleStart.add(cycle.activeDuration);
+    if (activeEnd.at.isAfter(after)) {
+      final cycleReminder = NoteReminder(
+        nextFireAt: cycleStart.at,
+        recurrence: reminder.recurrence,
+        recurrenceInterval: reminder.recurrenceInterval,
+      );
+      var occurrenceIndex = _firstReminderOccurrenceIndex(
+        cycleReminder,
+        after,
+        anchorDay: cycleStart.preferredDay,
+      );
+      while (occurrences.length < count) {
+        final occurrence = _reminderOccurrenceAt(
+          cycleReminder,
+          occurrenceIndex,
+          anchorDay: cycleStart.preferredDay,
+        );
+        if (!occurrence.isBefore(activeEnd.at)) {
+          break;
+        }
+        if (cycle.endAt case final endAt? when occurrence.isAfter(endAt)) {
+          return occurrences;
+        }
+        occurrences.add(occurrence);
+        occurrenceIndex++;
+      }
+    }
+
+    final nextCycleStart = activeEnd.add(cycle.restDuration);
+    if (!nextCycleStart.at.isAfter(cycleStart.at)) {
+      break;
+    }
+    cycleStart = nextCycleStart;
+    cycleIndex++;
+  }
+  return occurrences;
+}
+
+int _firstReminderOccurrenceIndex(
+  NoteReminder reminder,
+  DateTime after, {
+  int? anchorDay,
+}) {
   final anchor = reminder.nextFireAt;
   if (anchor.isAfter(after)) {
     return 0;
@@ -171,13 +322,21 @@ int _firstReminderOccurrenceIndex(NoteReminder reminder, DateTime after) {
   if (index < 0) {
     index = 0;
   }
-  while (!_reminderOccurrenceAt(reminder, index).isAfter(after)) {
+  while (!_reminderOccurrenceAt(
+    reminder,
+    index,
+    anchorDay: anchorDay,
+  ).isAfter(after)) {
     index++;
   }
   return index;
 }
 
-DateTime _reminderOccurrenceAt(NoteReminder reminder, int index) {
+DateTime _reminderOccurrenceAt(
+  NoteReminder reminder,
+  int index, {
+  int? anchorDay,
+}) {
   final anchor = reminder.nextFireAt;
   final interval = reminder.recurrenceInterval;
   return switch (reminder.recurrence) {
@@ -194,23 +353,64 @@ DateTime _reminderOccurrenceAt(NoteReminder reminder, int index) {
       anchor.month,
       anchor.day + (index * interval * 7),
     ),
-    ReminderRecurrence.monthly => _monthlyOccurrence(anchor, index * interval),
-    ReminderRecurrence.yearly => _yearlyOccurrence(anchor, index * interval),
+    ReminderRecurrence.monthly => _monthlyOccurrence(
+      anchor,
+      index * interval,
+      anchorDay: anchorDay,
+    ),
+    ReminderRecurrence.yearly => _yearlyOccurrence(
+      anchor,
+      index * interval,
+      anchorDay: anchorDay,
+    ),
   };
 }
 
-DateTime _monthlyOccurrence(DateTime anchor, int monthOffset) {
+DateTime _monthlyOccurrence(
+  DateTime anchor,
+  int monthOffset, {
+  int? anchorDay,
+}) {
   final zeroBasedMonth = anchor.month - 1 + monthOffset;
   final year = anchor.year + zeroBasedMonth ~/ 12;
   final month = zeroBasedMonth % 12 + 1;
-  final day = anchor.day.clamp(1, _daysInMonth(year, month)).toInt();
+  final day = (anchorDay ?? anchor.day)
+      .clamp(1, _daysInMonth(year, month))
+      .toInt();
   return _dateTimeLike(anchor, year, month, day);
 }
 
-DateTime _yearlyOccurrence(DateTime anchor, int yearOffset) {
+DateTime _yearlyOccurrence(DateTime anchor, int yearOffset, {int? anchorDay}) {
   final year = anchor.year + yearOffset;
-  final day = anchor.day.clamp(1, _daysInMonth(year, anchor.month)).toInt();
+  final day = (anchorDay ?? anchor.day)
+      .clamp(1, _daysInMonth(year, anchor.month))
+      .toInt();
   return _dateTimeLike(anchor, year, anchor.month, day);
+}
+
+class _ScheduleCursor {
+  const _ScheduleCursor(this.at, this.preferredDay);
+
+  final DateTime at;
+  final int preferredDay;
+
+  _ScheduleCursor add(ReminderDuration duration) {
+    return switch (duration.unit) {
+      ReminderDurationUnit.days => _addDays(duration.value),
+      ReminderDurationUnit.weeks => _addDays(duration.value * 7),
+      ReminderDurationUnit.months => _addMonths(duration.value),
+    };
+  }
+
+  _ScheduleCursor _addDays(int days) {
+    final result = _dateTimeLike(at, at.year, at.month, at.day + days);
+    return _ScheduleCursor(result, result.day);
+  }
+
+  _ScheduleCursor _addMonths(int months) {
+    final result = _monthlyOccurrence(at, months, anchorDay: preferredDay);
+    return _ScheduleCursor(result, preferredDay);
+  }
 }
 
 DateTime _dateTimeLike(DateTime anchor, int year, int month, int day) {

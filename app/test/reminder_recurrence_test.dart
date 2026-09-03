@@ -118,4 +118,159 @@ void main() {
       isEmpty,
     );
   });
+
+  test('alerts daily for an active week then skips complete rest weeks', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 7, 22),
+      recurrence: ReminderRecurrence.daily,
+      cycle: const ReminderCycle(
+        activeDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.weeks,
+        ),
+        restDuration: ReminderDuration(
+          value: 2,
+          unit: ReminderDurationUnit.weeks,
+        ),
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 9, 7, 21),
+        count: 10,
+      ),
+      [
+        for (var day = 7; day <= 13; day++) DateTime.utc(2026, 9, day, 22),
+        DateTime.utc(2026, 9, 28, 22),
+        DateTime.utc(2026, 9, 29, 22),
+        DateTime.utc(2026, 9, 30, 22),
+      ],
+    );
+  });
+
+  test('frequency restarts at the beginning of each active period', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 7, 9),
+      recurrence: ReminderRecurrence.daily,
+      recurrenceInterval: 2,
+      cycle: const ReminderCycle(
+        activeDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.weeks,
+        ),
+        restDuration: ReminderDuration(
+          value: 2,
+          unit: ReminderDurationUnit.weeks,
+        ),
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 9, 7, 8),
+        count: 6,
+      ),
+      [
+        DateTime.utc(2026, 9, 7, 9),
+        DateTime.utc(2026, 9, 9, 9),
+        DateTime.utc(2026, 9, 11, 9),
+        DateTime.utc(2026, 9, 13, 9),
+        DateTime.utc(2026, 9, 28, 9),
+        DateTime.utc(2026, 9, 30, 9),
+      ],
+    );
+  });
+
+  test('cycle count limits the number of active periods', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 1, 8),
+      recurrence: ReminderRecurrence.daily,
+      cycle: const ReminderCycle(
+        activeDuration: ReminderDuration(
+          value: 2,
+          unit: ReminderDurationUnit.days,
+        ),
+        restDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.days,
+        ),
+        maxCycles: 2,
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 9, 1, 7),
+        count: 10,
+      ),
+      [
+        DateTime.utc(2026, 9, 1, 8),
+        DateTime.utc(2026, 9, 2, 8),
+        DateTime.utc(2026, 9, 4, 8),
+        DateTime.utc(2026, 9, 5, 8),
+      ],
+    );
+  });
+
+  test('cycle end date includes an occurrence at the selected time', () {
+    final endAt = DateTime.utc(2026, 9, 4, 8);
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 1, 8),
+      recurrence: ReminderRecurrence.daily,
+      cycle: ReminderCycle(
+        activeDuration: const ReminderDuration(
+          value: 2,
+          unit: ReminderDurationUnit.days,
+        ),
+        restDuration: const ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.days,
+        ),
+        endAt: endAt,
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 9, 1, 7),
+        count: 10,
+      ),
+      [DateTime.utc(2026, 9, 1, 8), DateTime.utc(2026, 9, 2, 8), endAt],
+    );
+  });
+
+  test('consecutive monthly cycle periods preserve the intended day', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2027, 1, 31, 10),
+      recurrence: ReminderRecurrence.monthly,
+      cycle: const ReminderCycle(
+        activeDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.months,
+        ),
+        restDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.months,
+        ),
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2027, 1, 1),
+        count: 3,
+      ),
+      [
+        DateTime.utc(2027, 1, 31, 10),
+        DateTime.utc(2027, 3, 31, 10),
+        DateTime.utc(2027, 5, 31, 10),
+      ],
+    );
+  });
 }

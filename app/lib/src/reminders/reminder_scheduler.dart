@@ -270,7 +270,8 @@ class ReminderScheduler {
 
   bool _usesRollingOccurrences(NoteReminder reminder) {
     return reminder.repeats &&
-        (reminder.recurrenceInterval > 1 ||
+        (reminder.cycle != null ||
+            reminder.recurrenceInterval > 1 ||
             reminder.recurrence == ReminderRecurrence.monthly ||
             reminder.recurrence == ReminderRecurrence.yearly);
   }

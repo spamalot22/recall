@@ -258,6 +258,134 @@ void main() {
     },
   );
 
+  test('persists an active/rest cycle and its optional end date', () async {
+    final endAt = DateTime(2026, 12, 31, 22);
+    final noteId = await repository.createTextNote(
+      title: 'Treatment',
+      body: 'Take the daily dose',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 9, 7, 22),
+        recurrence: ReminderRecurrence.daily,
+        cycle: ReminderCycle(
+          activeDuration: const ReminderDuration(
+            value: 1,
+            unit: ReminderDurationUnit.weeks,
+          ),
+          restDuration: const ReminderDuration(
+            value: 2,
+            unit: ReminderDurationUnit.weeks,
+          ),
+          endAt: endAt,
+        ),
+      ),
+    );
+
+    final loaded = await repository.loadNoteForEditing(noteId);
+    final stored = await database.select(database.reminders).getSingle();
+
+    expect(loaded?.reminder?.recurrence, ReminderRecurrence.daily);
+    expect(
+      loaded?.reminder?.cycle?.activeDuration,
+      const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks),
+    );
+    expect(
+      loaded?.reminder?.cycle?.restDuration,
+      const ReminderDuration(value: 2, unit: ReminderDurationUnit.weeks),
+    );
+    expect(loaded?.reminder?.cycle?.endAt, endAt);
+    expect(stored.endsAt, isNotNull);
+    expect(stored.endsAt!.isAtSameMomentAs(endAt), isTrue);
+    expect(stored.recurrenceKind, ReminderRecurrence.none.name);
+    expect(
+      stored.recurrenceJson,
+      '{"version":2,"frequency":"daily","interval":1,"cycle":{"active":{"value":1,"unit":"weeks"},"rest":{"value":2,"unit":"weeks"}}}',
+    );
+  });
+
+  test('persists a cycle-count limit without an end date', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Three rounds',
+      body: 'Repeat this cycle three times',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 9, 7, 9),
+        recurrence: ReminderRecurrence.daily,
+        cycle: const ReminderCycle(
+          activeDuration: ReminderDuration(
+            value: 5,
+            unit: ReminderDurationUnit.days,
+          ),
+          restDuration: ReminderDuration(
+            value: 2,
+            unit: ReminderDurationUnit.days,
+          ),
+          maxCycles: 3,
+        ),
+      ),
+    );
+
+    final loaded = await repository.loadNoteForEditing(noteId);
+    final stored = await database.select(database.reminders).getSingle();
+
+    expect(loaded?.reminder?.cycle?.maxCycles, 3);
+    expect(loaded?.reminder?.cycle?.endAt, isNull);
+    expect(stored.endsAt, isNull);
+    expect(stored.recurrenceJson, contains('"maxCycles":3'));
+  });
+
+  test('labels a completed finite cycle as ended', () async {
+    await repository.createTextNote(
+      title: 'Finished course',
+      body: 'No more reminders expected',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2020, 1, 1, 9),
+        recurrence: ReminderRecurrence.daily,
+        cycle: const ReminderCycle(
+          activeDuration: ReminderDuration(
+            value: 1,
+            unit: ReminderDurationUnit.days,
+          ),
+          restDuration: ReminderDuration(
+            value: 1,
+            unit: ReminderDurationUnit.days,
+          ),
+          maxCycles: 1,
+        ),
+      ),
+    );
+
+    final preview = (await repository.watchNotePreviews().first).single;
+
+    expect(preview.recurring, isTrue);
+    expect(preview.reminderAt, isNull);
+    expect(preview.reminderLabel, endsWith('Ended'));
+  });
+
+  test('falls back safely when cycle metadata is malformed', () async {
+    final noteId = await repository.createTextNote(
+      title: 'Legacy reminder',
+      body: '',
+      reminder: NoteReminder(
+        nextFireAt: DateTime(2026, 9, 7, 9),
+        recurrence: ReminderRecurrence.daily,
+      ),
+    );
+    await (database.update(
+      database.reminders,
+    )..where((reminder) => reminder.noteId.equals(noteId))).write(
+      const RemindersCompanion(
+        recurrenceJson: Value(
+          '{"version":2,"frequency":"daily","interval":2,"cycle":{"active":{"value":0,"unit":"weeks"},"rest":{"value":1,"unit":"weeks"}}}',
+        ),
+      ),
+    );
+
+    final loaded = await repository.loadNoteForEditing(noteId);
+
+    expect(loaded?.reminder?.recurrence, ReminderRecurrence.none);
+    expect(loaded?.reminder?.recurrenceInterval, 1);
+    expect(loaded?.reminder?.cycle, isNull);
+  });
+
   test('loads and updates editable note content and reminder', () async {
     final noteId = await repository.createTextNote(
       title: 'Draft',

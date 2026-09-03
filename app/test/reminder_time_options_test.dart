@@ -218,6 +218,123 @@ void main() {
     expect(result?.recurrenceInterval, 2);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('enables a one-week active and rest cycle by default', (
+    tester,
+  ) async {
+    final now = DateTime(2026, 9, 1, 8);
+    ReminderEditorSelection? result;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                result = await showReminderEditor(
+                  context,
+                  initialAt: DateTime(2026, 9, 7, 22),
+                  initialRecurrence: ReminderRecurrence.daily,
+                  nowProvider: () => now,
+                );
+              },
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    final cycleToggle = find.text('Active/rest cycle');
+    await tester.ensureVisible(cycleToggle);
+    await tester.tap(cycleToggle);
+    await tester.pumpAndSettle();
+    expect(find.text('Active for'), findsOneWidget);
+    expect(find.text('Rest for'), findsOneWidget);
+    expect(find.text('Never'), findsOneWidget);
+
+    final done = find.widgetWithText(FilledButton, 'Done');
+    await tester.ensureVisible(done);
+    await tester.tap(done);
+    await tester.pumpAndSettle();
+
+    expect(
+      result?.cycle?.activeDuration,
+      const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks),
+    );
+    expect(
+      result?.cycle?.restDuration,
+      const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks),
+    );
+    expect(result?.cycle?.endAt, isNull);
+    expect(result?.cycle?.maxCycles, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('limits an active/rest schedule by cycle count', (tester) async {
+    final now = DateTime(2026, 9, 1, 8);
+    ReminderEditorSelection? result;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                result = await showReminderEditor(
+                  context,
+                  initialAt: DateTime(2026, 9, 7, 22),
+                  initialRecurrence: ReminderRecurrence.daily,
+                  initialCycle: const ReminderCycle(
+                    activeDuration: ReminderDuration(
+                      value: 1,
+                      unit: ReminderDurationUnit.weeks,
+                    ),
+                    restDuration: ReminderDuration(
+                      value: 1,
+                      unit: ReminderDurationUnit.weeks,
+                    ),
+                  ),
+                  nowProvider: () => now,
+                );
+              },
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    final never = find.text('Never');
+    await tester.ensureVisible(never);
+    await tester.tap(never);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('After a number of cycles').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Number of cycles'), findsOneWidget);
+
+    final increase = find.byTooltip('Increase Number of cycles');
+    await tester.ensureVisible(increase);
+    await tester.tap(increase);
+    await tester.pumpAndSettle();
+
+    final done = find.widgetWithText(FilledButton, 'Done');
+    await tester.ensureVisible(done);
+    await tester.tap(done);
+    await tester.pumpAndSettle();
+
+    expect(result?.cycle?.maxCycles, 4);
+    expect(result?.cycle?.endAt, isNull);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 List<String> _labels(List<ReminderTimePreset> presets) {

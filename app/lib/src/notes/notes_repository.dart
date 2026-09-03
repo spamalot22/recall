@@ -587,10 +587,19 @@ class NotesRepository {
     }
 
     final reminder = reminders.single;
+    final storedRecurrence = ReminderRecurrence.fromName(
+      reminder.recurrenceKind,
+    );
+    final rule = _decodeRecurrenceRule(
+      reminder.recurrenceJson,
+      reminder.endsAt?.toLocal(),
+      storedRecurrence,
+    );
     return NoteReminder(
       nextFireAt: reminder.nextFireAt.toLocal(),
-      recurrence: ReminderRecurrence.fromName(reminder.recurrenceKind),
-      recurrenceInterval: _decodeRecurrenceInterval(reminder.recurrenceJson),
+      recurrence: rule.recurrence,
+      recurrenceInterval: rule.interval,
+      cycle: rule.cycle,
       snoozeUntil: reminder.snoozeUntil?.toLocal(),
     );
   }
@@ -608,9 +617,16 @@ class NotesRepository {
             noteId: noteId,
             nextFireAt: reminder.nextFireAt.toUtc(),
             timezone: DateTime.now().timeZoneName,
-            recurrenceKind: Value(reminder.recurrence.name),
+            // Older clients treat cycle schedules as one-time reminders rather
+            // than incorrectly firing through their rest periods.
+            recurrenceKind: Value(
+              reminder.cycle == null
+                  ? reminder.recurrence.name
+                  : ReminderRecurrence.none.name,
+            ),
             recurrenceJson: Value(_encodeRecurrenceRule(reminder)),
             snoozeUntil: Value(reminder.snoozeUntil?.toUtc()),
+            endsAt: Value(reminder.cycle?.endAt?.toUtc()),
             createdAt: now,
             updatedAt: now,
           ),
@@ -622,14 +638,25 @@ class NotesRepository {
       return 'No reminder';
     }
 
-    final date = _formatDateTime(
-      _nextReminderOccurrence(reminder) ?? reminder.nextFireAt,
-    );
     if (!reminder.repeats) {
-      return date;
+      return _formatDateTime(reminder.nextFireAt);
     }
 
-    return '${reminder.recurrence.intervalLabel(reminder.recurrenceInterval)} • $date';
+    final repeat = reminder.recurrence.intervalLabel(
+      reminder.recurrenceInterval,
+    );
+    final cycle = reminder.cycle;
+    final nextOccurrence = _nextReminderOccurrence(reminder);
+    if (nextOccurrence == null) {
+      return cycle == null
+          ? '$repeat • Ended'
+          : '$repeat • ${cycle.label} • Ended';
+    }
+    final date = _formatDateTime(nextOccurrence);
+    if (cycle == null) {
+      return '$repeat • $date';
+    }
+    return '$repeat • ${cycle.label} • $date';
   }
 
   DateTime? _nextReminderOccurrence(NoteReminder? reminder) {
@@ -642,29 +669,109 @@ class NotesRepository {
     return reminder.nextOccurrenceAfter(DateTime.now());
   }
 
-  int _decodeRecurrenceInterval(String? encoded) {
+  ({ReminderRecurrence recurrence, int interval, ReminderCycle? cycle})
+  _decodeRecurrenceRule(
+    String? encoded,
+    DateTime? endAt,
+    ReminderRecurrence storedRecurrence,
+  ) {
     if (encoded == null || encoded.isEmpty) {
-      return 1;
+      return (recurrence: storedRecurrence, interval: 1, cycle: null);
     }
     try {
       final decoded = jsonDecode(encoded);
-      if (decoded is Map && decoded['version'] == 1) {
-        final interval = decoded['interval'];
-        if (interval is int && interval >= 1 && interval <= 999) {
-          return interval;
-        }
+      if (decoded is! Map) {
+        return (recurrence: ReminderRecurrence.none, interval: 1, cycle: null);
       }
+      final interval = _validRuleValue(decoded['interval']) ?? 1;
+      if (decoded['version'] == 1) {
+        return (recurrence: storedRecurrence, interval: interval, cycle: null);
+      }
+      if (decoded['version'] != 2) {
+        return (recurrence: ReminderRecurrence.none, interval: 1, cycle: null);
+      }
+
+      final cycleJson = decoded['cycle'];
+      if (cycleJson is! Map) {
+        throw const FormatException('Missing cycle metadata.');
+      }
+      final frequencyName = decoded['frequency'];
+      final recurrence = frequencyName is String
+          ? ReminderRecurrence.fromName(frequencyName)
+          : ReminderRecurrence.none;
+      final active = _decodeReminderDuration(cycleJson['active']);
+      final rest = _decodeReminderDuration(cycleJson['rest']);
+      final maxCycles = cycleJson['maxCycles'];
+      final validMaxCycles = maxCycles == null
+          ? null
+          : _validRuleValue(maxCycles);
+      if (active == null ||
+          rest == null ||
+          recurrence == ReminderRecurrence.none ||
+          (maxCycles != null && validMaxCycles == null) ||
+          (endAt != null && validMaxCycles != null)) {
+        throw const FormatException('Invalid cycle metadata.');
+      }
+      return (
+        recurrence: recurrence,
+        interval: interval,
+        cycle: ReminderCycle(
+          activeDuration: active,
+          restDuration: rest,
+          endAt: endAt,
+          maxCycles: validMaxCycles,
+        ),
+      );
     } on FormatException {
-      // Invalid optional recurrence metadata falls back to legacy behavior.
+      // Unknown or invalid structured rules become one-time reminders. This
+      // avoids accidentally firing continuously when pause data is unusable.
     }
-    return 1;
+    return (recurrence: ReminderRecurrence.none, interval: 1, cycle: null);
+  }
+
+  ReminderDuration? _decodeReminderDuration(Object? encoded) {
+    if (encoded is! Map) {
+      return null;
+    }
+    final value = _validRuleValue(encoded['value']);
+    final unitName = encoded['unit'];
+    final unit = unitName is String
+        ? ReminderDurationUnit.tryFromName(unitName)
+        : null;
+    if (value == null || unit == null) {
+      return null;
+    }
+    return ReminderDuration(value: value, unit: unit);
+  }
+
+  int? _validRuleValue(Object? value) {
+    return value is int && value >= 1 && value <= 999 ? value : null;
   }
 
   String? _encodeRecurrenceRule(NoteReminder reminder) {
-    if (!reminder.repeats || reminder.recurrenceInterval == 1) {
+    if (!reminder.repeats) {
       return null;
     }
-    return jsonEncode({'version': 1, 'interval': reminder.recurrenceInterval});
+    final cycle = reminder.cycle;
+    if (cycle == null) {
+      return reminder.recurrenceInterval == 1
+          ? null
+          : jsonEncode({'version': 1, 'interval': reminder.recurrenceInterval});
+    }
+    return jsonEncode({
+      'version': 2,
+      'frequency': reminder.recurrence.name,
+      'interval': reminder.recurrenceInterval,
+      'cycle': {
+        'active': _encodeReminderDuration(cycle.activeDuration),
+        'rest': _encodeReminderDuration(cycle.restDuration),
+        if (cycle.maxCycles != null) 'maxCycles': cycle.maxCycles,
+      },
+    });
+  }
+
+  Map<String, Object> _encodeReminderDuration(ReminderDuration duration) {
+    return {'value': duration.value, 'unit': duration.unit.name};
   }
 
   String _formatDateTime(DateTime dateTime) {

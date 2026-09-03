@@ -9,11 +9,13 @@ class ReminderEditorSelection {
     this.at,
     this.recurrence, {
     this.recurrenceInterval = 1,
+    this.cycle,
   });
 
   final DateTime? at;
   final ReminderRecurrence recurrence;
   final int recurrenceInterval;
+  final ReminderCycle? cycle;
 }
 
 Future<ReminderEditorSelection?> showReminderEditor(
@@ -21,6 +23,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
   required DateTime? initialAt,
   required ReminderRecurrence initialRecurrence,
   int initialRecurrenceInterval = 1,
+  ReminderCycle? initialCycle,
   DateTime Function()? nowProvider,
 }) {
   final currentTime = nowProvider ?? DateTime.now;
@@ -29,6 +32,22 @@ Future<ReminderEditorSelection?> showReminderEditor(
   var selectedTime = TimeOfDay.fromDateTime(initialSelection);
   var recurrence = initialRecurrence;
   var recurrenceInterval = initialRecurrenceInterval.clamp(1, 999).toInt();
+  var cycleEnabled = initialCycle != null;
+  var activeDuration =
+      initialCycle?.activeDuration ??
+      const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks);
+  var restDuration =
+      initialCycle?.restDuration ??
+      const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks);
+  var cycleEndMode = initialCycle?.endAt != null
+      ? _CycleEndMode.date
+      : initialCycle?.maxCycles != null
+      ? _CycleEndMode.cycles
+      : _CycleEndMode.never;
+  var cycleEndDate = reminderDateOnly(
+    initialCycle?.endAt ?? initialSelection.add(const Duration(days: 28)),
+  );
+  var maxCycles = initialCycle?.maxCycles ?? 3;
 
   return showModalBottomSheet<ReminderEditorSelection>(
     context: context,
@@ -46,8 +65,18 @@ Future<ReminderEditorSelection?> showReminderEditor(
         final availablePresets = recurrence == ReminderRecurrence.none
             ? availableReminderTimePresets(selectedDate: selectedDate, now: now)
             : reminderTimePresets;
+        final cycleEndAt = combineReminderDateAndTime(
+          cycleEndDate,
+          selectedTime,
+        );
+        final cycleIsValid =
+            !cycleEnabled ||
+            cycleEndMode != _CycleEndMode.date ||
+            !cycleEndAt.isBefore(selectedAt);
         final isValid =
-            recurrence != ReminderRecurrence.none || selectedAt.isAfter(now);
+            (recurrence != ReminderRecurrence.none ||
+                selectedAt.isAfter(now)) &&
+            cycleIsValid;
         final theme = Theme.of(sheetContext);
         final localizations = MaterialLocalizations.of(sheetContext);
         final textTheme = theme.textTheme;
@@ -59,6 +88,9 @@ Future<ReminderEditorSelection?> showReminderEditor(
           final selectionNow = currentTime();
           setSheetState(() {
             selectedDate = reminderDateOnly(date);
+            if (cycleEndDate.isBefore(selectedDate)) {
+              cycleEndDate = selectedDate;
+            }
             if (recurrence == ReminderRecurrence.none) {
               selectedTime = validReminderTimeForDate(
                 selectedDate: selectedDate,
@@ -209,7 +241,9 @@ Future<ReminderEditorSelection?> showReminderEditor(
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    'Choose a future time for this reminder.',
+                                    cycleIsValid
+                                        ? 'Choose a future time for this reminder.'
+                                        : 'The end date cannot be before the start date.',
                                     style: textTheme.bodySmall?.copyWith(
                                       color: theme.colorScheme.error,
                                     ),
@@ -244,6 +278,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
                           recurrence = value;
                           if (value == ReminderRecurrence.none) {
                             recurrenceInterval = 1;
+                            cycleEnabled = false;
                           }
                         });
                       }
@@ -309,6 +344,142 @@ Future<ReminderEditorSelection?> showReminderEditor(
                             ),
                           ),
                   ),
+                  AnimatedSize(
+                    duration: selectionMotion,
+                    curve: Curves.easeOutCubic,
+                    child: recurrence == ReminderRecurrence.none
+                        ? const SizedBox(width: double.infinity)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 8),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Active/rest cycle'),
+                                secondary: const Icon(
+                                  Icons.event_repeat_rounded,
+                                ),
+                                value: cycleEnabled,
+                                onChanged: (value) =>
+                                    setSheetState(() => cycleEnabled = value),
+                              ),
+                              AnimatedSize(
+                                duration: selectionMotion,
+                                curve: Curves.easeOutCubic,
+                                child: !cycleEnabled
+                                    ? const SizedBox(width: double.infinity)
+                                    : Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          _ReminderDurationField(
+                                            label: 'Active for',
+                                            duration: activeDuration,
+                                            onChanged: (value) => setSheetState(
+                                              () => activeDuration = value,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          _ReminderDurationField(
+                                            label: 'Rest for',
+                                            duration: restDuration,
+                                            onChanged: (value) => setSheetState(
+                                              () => restDuration = value,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          DropdownButtonFormField<
+                                            _CycleEndMode
+                                          >(
+                                            initialValue: cycleEndMode,
+                                            isExpanded: true,
+                                            decoration: const InputDecoration(
+                                              labelText: 'Ends',
+                                              prefixIcon: Icon(
+                                                Icons.flag_outlined,
+                                              ),
+                                            ),
+                                            items: const [
+                                              DropdownMenuItem(
+                                                value: _CycleEndMode.never,
+                                                child: Text('Never'),
+                                              ),
+                                              DropdownMenuItem(
+                                                value: _CycleEndMode.date,
+                                                child: Text('On a date'),
+                                              ),
+                                              DropdownMenuItem(
+                                                value: _CycleEndMode.cycles,
+                                                child: Text(
+                                                  'After a number of cycles',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
+                                            onChanged: (value) {
+                                              if (value != null) {
+                                                setSheetState(
+                                                  () => cycleEndMode = value,
+                                                );
+                                              }
+                                            },
+                                          ),
+                                          if (cycleEndMode ==
+                                              _CycleEndMode.date) ...[
+                                            const SizedBox(height: 12),
+                                            ListTile(
+                                              contentPadding: EdgeInsets.zero,
+                                              leading: const Icon(
+                                                Icons.event_outlined,
+                                              ),
+                                              title: const Text('End date'),
+                                              subtitle: Text(
+                                                localizations.formatMediumDate(
+                                                  cycleEndDate,
+                                                ),
+                                              ),
+                                              trailing: const Icon(
+                                                Icons.chevron_right_rounded,
+                                              ),
+                                              onTap: () async {
+                                                final selected =
+                                                    await _pickCycleEndDate(
+                                                      sheetContext,
+                                                      cycleEndDate,
+                                                      firstDate: selectedDate,
+                                                    );
+                                                if (selected != null &&
+                                                    sheetContext.mounted) {
+                                                  setSheetState(
+                                                    () =>
+                                                        cycleEndDate = selected,
+                                                  );
+                                                }
+                                              },
+                                            ),
+                                          ],
+                                          if (cycleEndMode ==
+                                              _CycleEndMode.cycles) ...[
+                                            const SizedBox(height: 12),
+                                            _NumberStepperField(
+                                              label: 'Number of cycles',
+                                              value: maxCycles,
+                                              unit: maxCycles == 1
+                                                  ? 'cycle'
+                                                  : 'cycles',
+                                              onChanged: (value) =>
+                                                  setSheetState(
+                                                    () => maxCycles = value,
+                                                  ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                              ),
+                            ],
+                          ),
+                  ),
                   const SizedBox(height: 20),
                   Row(
                     children: [
@@ -331,6 +502,23 @@ Future<ReminderEditorSelection?> showReminderEditor(
                                   selectedAt,
                                   recurrence,
                                   recurrenceInterval: recurrenceInterval,
+                                  cycle:
+                                      recurrence == ReminderRecurrence.none ||
+                                          !cycleEnabled
+                                      ? null
+                                      : ReminderCycle(
+                                          activeDuration: activeDuration,
+                                          restDuration: restDuration,
+                                          endAt:
+                                              cycleEndMode == _CycleEndMode.date
+                                              ? cycleEndAt
+                                              : null,
+                                          maxCycles:
+                                              cycleEndMode ==
+                                                  _CycleEndMode.cycles
+                                              ? maxCycles
+                                              : null,
+                                        ),
                                 ),
                               )
                             : null,
@@ -359,17 +547,167 @@ String _repeatOptionLabel(ReminderRecurrence recurrence) {
   };
 }
 
-Future<int?> _pickRecurrenceInterval(
+enum _CycleEndMode { never, date, cycles }
+
+class _ReminderDurationField extends StatelessWidget {
+  const _ReminderDurationField({
+    required this.label,
+    required this.duration,
+    required this.onChanged,
+  });
+
+  final String label;
+  final ReminderDuration duration;
+  final ValueChanged<ReminderDuration> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(labelText: label),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Decrease $label',
+            onPressed: duration.value > 1
+                ? () => onChanged(
+                    ReminderDuration(
+                      value: duration.value - 1,
+                      unit: duration.unit,
+                    ),
+                  )
+                : null,
+            icon: const Icon(Icons.remove_rounded),
+          ),
+          TextButton(
+            onPressed: () async {
+              final selected = await _pickBoundedNumber(
+                context,
+                duration.value,
+                title: label,
+                fieldLabel: 'Length',
+              );
+              if (selected != null && context.mounted) {
+                onChanged(
+                  ReminderDuration(value: selected, unit: duration.unit),
+                );
+              }
+            },
+            child: Text('${duration.value}'),
+          ),
+          IconButton(
+            tooltip: 'Increase $label',
+            onPressed: duration.value < 999
+                ? () => onChanged(
+                    ReminderDuration(
+                      value: duration.value + 1,
+                      unit: duration.unit,
+                    ),
+                  )
+                : null,
+            icon: const Icon(Icons.add_rounded),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<ReminderDurationUnit>(
+                value: duration.unit,
+                isExpanded: true,
+                items: [
+                  for (final unit in ReminderDurationUnit.values)
+                    DropdownMenuItem(
+                      value: unit,
+                      child: Text(unit.unitLabel(duration.value)),
+                    ),
+                ],
+                onChanged: (unit) {
+                  if (unit != null) {
+                    onChanged(
+                      ReminderDuration(value: duration.value, unit: unit),
+                    );
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NumberStepperField extends StatelessWidget {
+  const _NumberStepperField({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int value;
+  final String unit;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(labelText: label),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Decrease $label',
+            onPressed: value > 1 ? () => onChanged(value - 1) : null,
+            icon: const Icon(Icons.remove_rounded),
+          ),
+          TextButton(
+            onPressed: () async {
+              final selected = await _pickBoundedNumber(
+                context,
+                value,
+                title: label,
+                fieldLabel: 'Count',
+              );
+              if (selected != null && context.mounted) {
+                onChanged(selected);
+              }
+            },
+            child: Text('$value'),
+          ),
+          IconButton(
+            tooltip: 'Increase $label',
+            onPressed: value < 999 ? () => onChanged(value + 1) : null,
+            icon: const Icon(Icons.add_rounded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(unit)),
+        ],
+      ),
+    );
+  }
+}
+
+Future<int?> _pickRecurrenceInterval(BuildContext context, int initialValue) {
+  return _pickBoundedNumber(
+    context,
+    initialValue,
+    title: 'Repeat interval',
+    fieldLabel: 'Every',
+  );
+}
+
+Future<int?> _pickBoundedNumber(
   BuildContext context,
-  int initialValue,
-) async {
+  int initialValue, {
+  required String title,
+  required String fieldLabel,
+}) async {
   final formKey = GlobalKey<FormState>();
   final controller = TextEditingController(text: '$initialValue');
   try {
     return await showDialog<int>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Repeat interval'),
+        title: Text(title),
         content: Form(
           key: formKey,
           child: TextFormField(
@@ -380,7 +718,7 @@ Future<int?> _pickRecurrenceInterval(
               FilteringTextInputFormatter.digitsOnly,
               LengthLimitingTextInputFormatter(3),
             ],
-            decoration: const InputDecoration(labelText: 'Every'),
+            decoration: InputDecoration(labelText: fieldLabel),
             validator: (value) {
               final interval = int.tryParse(value ?? '');
               if (interval == null || interval < 1 || interval > 999) {
@@ -433,6 +771,27 @@ Future<DateTime?> _pickReminderDate(
     helpText: 'Choose reminder date',
     initialDate: initialDate,
     firstDate: firstDate,
+    lastDate: lastDate,
+  );
+}
+
+Future<DateTime?> _pickCycleEndDate(
+  BuildContext context,
+  DateTime initial, {
+  required DateTime firstDate,
+}) {
+  final start = reminderDateOnly(firstDate);
+  final lastDate = DateTime(start.year + 100, start.month, start.day);
+  final initialDate = initial.isBefore(start)
+      ? start
+      : initial.isAfter(lastDate)
+      ? lastDate
+      : initial;
+  return showDatePicker(
+    context: context,
+    helpText: 'Choose cycle end date',
+    initialDate: initialDate,
+    firstDate: start,
     lastDate: lastDate,
   );
 }

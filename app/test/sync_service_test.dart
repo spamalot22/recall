@@ -71,8 +71,11 @@ void main() {
             noteId: '0198a3b4-8e80-7000-8000-000000000001',
             nextFireAt: DateTime.utc(2026, 8, 31, 22),
             timezone: 'UTC',
-            recurrenceKind: const Value('monthly'),
-            recurrenceJson: const Value('{"version":1,"interval":2}'),
+            recurrenceKind: const Value('none'),
+            recurrenceJson: const Value(
+              '{"version":2,"frequency":"monthly","interval":1,"cycle":{"active":{"value":1,"unit":"weeks"},"rest":{"value":2,"unit":"weeks"}}}',
+            ),
+            endsAt: Value(DateTime.utc(2026, 12, 31, 22)),
             createdAt: now,
             updatedAt: now,
           ),
@@ -91,8 +94,12 @@ void main() {
     final note = Map<String, Object?>.from(payload['note']! as Map);
     final reminder = Map<String, Object?>.from(payload['reminder']! as Map);
     expect(note['sortOrder'], 7);
-    expect(reminder['recurrenceKind'], 'monthly');
-    expect(reminder['recurrenceJson'], '{"version":1,"interval":2}');
+    expect(reminder['recurrenceKind'], 'none');
+    expect(
+      reminder['recurrenceJson'],
+      '{"version":2,"frequency":"monthly","interval":1,"cycle":{"active":{"value":1,"unit":"weeks"},"rest":{"value":2,"unit":"weeks"}}}',
+    );
+    expect(reminder['endsAt'], '2026-12-31T22:00:00.000Z');
   });
 
   test(

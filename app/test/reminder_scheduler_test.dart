@@ -128,6 +128,75 @@ void main() {
     );
   });
 
+  test('uses rolling alarms for active/rest cycles', () async {
+    AndroidFlutterLocalNotificationsPlugin.registerWith();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    const notificationsChannel = MethodChannel(
+      'dexterous.com/flutter/local_notifications',
+    );
+    const deviceChannel = MethodChannel('app.recall.notes/device');
+    final calls = <MethodCall>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(notificationsChannel, (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'initialize' => true,
+        'getNotificationAppLaunchDetails' => null,
+        'canScheduleExactNotifications' => true,
+        _ => null,
+      };
+    });
+    messenger.setMockMethodCallHandler(
+      deviceChannel,
+      (call) async => call.method == 'localTimezone' ? 'UTC' : null,
+    );
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(notificationsChannel, null);
+      messenger.setMockMethodCallHandler(deviceChannel, null);
+    });
+
+    final scheduler = ReminderScheduler();
+    addTearDown(scheduler.dispose);
+    await scheduler.scheduleNoteReminder(
+      noteId: 'cycled-note',
+      title: 'Daily treatment',
+      body: '',
+      reminder: NoteReminder(
+        nextFireAt: DateTime.now().add(const Duration(days: 1)),
+        recurrence: ReminderRecurrence.daily,
+        cycle: const ReminderCycle(
+          activeDuration: ReminderDuration(
+            value: 1,
+            unit: ReminderDurationUnit.weeks,
+          ),
+          restDuration: ReminderDuration(
+            value: 2,
+            unit: ReminderDurationUnit.weeks,
+          ),
+        ),
+      ),
+      requestPermissions: false,
+    );
+
+    final scheduled = calls
+        .where((call) => call.method == 'zonedSchedule')
+        .toList();
+    expect(scheduled, hasLength(24));
+    expect(
+      scheduled.every(
+        (call) => !(call.arguments as Map<Object?, Object?>).containsKey(
+          'matchDateTimeComponents',
+        ),
+      ),
+      isTrue,
+    );
+  });
+
   test('uses rolling alarms for last-day monthly recurrence', () async {
     AndroidFlutterLocalNotificationsPlugin.registerWith();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;

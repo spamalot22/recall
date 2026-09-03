@@ -1602,7 +1602,7 @@ class _NoteCardState extends ConsumerState<NoteCard> {
   Widget build(BuildContext context) {
     final note = widget.note;
     final colors = note.mood.resolve(Theme.of(context).colorScheme);
-    final hasReminder = note.reminderAt != null;
+    final hasReminder = note.reminderAt != null || note.recurring;
     final hasTitle = note.title.trim().isNotEmpty;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
@@ -3329,6 +3329,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   DateTime? _reminderAt;
   ReminderRecurrence _recurrence = ReminderRecurrence.none;
   int _recurrenceInterval = 1;
+  ReminderCycle? _reminderCycle;
   ColorMood _mood = ColorMood.clear;
   bool _moodWasPicked = false;
   bool _pinned = false;
@@ -3346,7 +3347,12 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   bool _autosaveAgain = false;
   int _draftRevision = 0;
   int _persistedRevision = 0;
-  ({DateTime at, ReminderRecurrence recurrence, int interval})?
+  ({
+    DateTime at,
+    ReminderRecurrence recurrence,
+    int interval,
+    ReminderCycle? cycle,
+  })?
   _quietReminderSchedule;
 
   bool get _editing => widget.noteId != null;
@@ -3414,6 +3420,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       _reminderAt = note.reminder?.nextFireAt;
       _recurrence = note.reminder?.recurrence ?? ReminderRecurrence.none;
       _recurrenceInterval = note.reminder?.recurrenceInterval ?? 1;
+      _reminderCycle = note.reminder?.cycle;
       _hadReminder = note.reminder != null;
       _mood = note.mood;
       _moodWasPicked = !note.moodIsAutomatic;
@@ -3886,6 +3893,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       initialAt: _reminderAt,
       initialRecurrence: _recurrence,
       initialRecurrenceInterval: _recurrenceInterval,
+      initialCycle: _reminderCycle,
     );
     if (selection == null || !mounted) {
       return;
@@ -3898,6 +3906,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       _recurrenceInterval = selection.at == null
           ? 1
           : selection.recurrenceInterval;
+      _reminderCycle = selection.at == null ? null : selection.cycle;
     });
   }
 
@@ -3908,6 +3917,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       _reminderAt = null;
       _recurrence = ReminderRecurrence.none;
       _recurrenceInterval = 1;
+      _reminderCycle = null;
     });
   }
 
@@ -4053,6 +4063,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
               nextFireAt: _reminderAt!,
               recurrence: _recurrence,
               recurrenceInterval: _recurrenceInterval,
+              cycle: _reminderCycle,
             ),
     );
   }
@@ -4101,6 +4112,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
             at: draft.reminder!.nextFireAt,
             recurrence: draft.reminder!.recurrence,
             interval: draft.reminder!.recurrenceInterval,
+            cycle: draft.reminder!.cycle,
           )) {
         await scheduler.scheduleNoteReminder(
           noteId: noteId,
@@ -4113,6 +4125,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
           at: draft.reminder!.nextFireAt,
           recurrence: draft.reminder!.recurrence,
           interval: draft.reminder!.recurrenceInterval,
+          cycle: draft.reminder!.cycle,
         );
       }
       _hadReminder = draft.reminder != null;
@@ -4266,10 +4279,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       }
       return;
     }
-    final reminder = draft.reminder;
-    if (reminder != null &&
-        !reminder.repeats &&
-        !reminder.nextFireAt.isAfter(DateTime.now())) {
+    final initialReminder = draft.reminder;
+    if (initialReminder != null &&
+        !initialReminder.repeats &&
+        !initialReminder.nextFireAt.isAfter(DateTime.now())) {
       _showSnackBar(context, 'Choose a future reminder time.');
       return;
     }
@@ -4281,6 +4294,15 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       final syncService = ref.read(syncServiceProvider);
       await _autosaveFuture;
       draft = _captureDraft();
+      final reminder = draft.reminder;
+      if (reminder != null &&
+          !reminder.repeats &&
+          !reminder.nextFireAt.isAfter(DateTime.now())) {
+        if (mounted) {
+          _showSnackBar(context, 'Choose a future reminder time.');
+        }
+        return;
+      }
       final noteId = await _persistDraftSnapshot(draft);
       try {
         if (reminder == null && _hadReminder) {
