@@ -71,8 +71,9 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   } else {
     printResult(result);
-    console.warn(
-      `::warning::npm audit could not reach the advisory service after ${maxAttempts} attempts. Dependabot remains the vulnerability backstop.`,
+    console.error(
+      `::error::npm audit could not reach the advisory service after ${maxAttempts} attempts. Refusing to continue without a completed audit.`,
     );
+    process.exit(result.status ?? 1);
   }
 }
