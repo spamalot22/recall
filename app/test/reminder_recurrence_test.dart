@@ -150,6 +150,40 @@ void main() {
     );
   });
 
+  test('uses an earlier cycle anchor without alerting before the start', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 4, 22),
+      recurrence: ReminderRecurrence.daily,
+      cycle: ReminderCycle(
+        anchorAt: DateTime.utc(2026, 8, 31, 22),
+        activeDuration: const ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.weeks,
+        ),
+        restDuration: const ReminderDuration(
+          value: 4,
+          unit: ReminderDurationUnit.weeks,
+        ),
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 9, 2, 12),
+        count: 6,
+      ),
+      [
+        DateTime.utc(2026, 9, 4, 22),
+        DateTime.utc(2026, 9, 5, 22),
+        DateTime.utc(2026, 9, 6, 22),
+        DateTime.utc(2026, 10, 5, 22),
+        DateTime.utc(2026, 10, 6, 22),
+        DateTime.utc(2026, 10, 7, 22),
+      ],
+    );
+  });
+
   test('frequency restarts at the beginning of each active period', () {
     final reminder = NoteReminder(
       nextFireAt: DateTime.utc(2026, 9, 7, 9),

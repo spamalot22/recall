@@ -594,6 +594,7 @@ class NotesRepository {
       reminder.recurrenceJson,
       reminder.endsAt?.toLocal(),
       storedRecurrence,
+      reminder.nextFireAt.toLocal(),
     );
     return NoteReminder(
       nextFireAt: reminder.nextFireAt.toLocal(),
@@ -674,6 +675,7 @@ class NotesRepository {
     String? encoded,
     DateTime? endAt,
     ReminderRecurrence storedRecurrence,
+    DateTime nextFireAt,
   ) {
     if (encoded == null || encoded.isEmpty) {
       return (recurrence: storedRecurrence, interval: 1, cycle: null);
@@ -687,7 +689,8 @@ class NotesRepository {
       if (decoded['version'] == 1) {
         return (recurrence: storedRecurrence, interval: interval, cycle: null);
       }
-      if (decoded['version'] != 2) {
+      final version = decoded['version'];
+      if (version != 2 && version != 3) {
         return (recurrence: ReminderRecurrence.none, interval: 1, cycle: null);
       }
 
@@ -701,6 +704,10 @@ class NotesRepository {
           : ReminderRecurrence.none;
       final active = _decodeReminderDuration(cycleJson['active']);
       final rest = _decodeReminderDuration(cycleJson['rest']);
+      final encodedAnchor = cycleJson['anchorAt'];
+      final anchorAt = version == 3 && encodedAnchor is String
+          ? DateTime.tryParse(encodedAnchor)?.toLocal()
+          : null;
       final maxCycles = cycleJson['maxCycles'];
       final validMaxCycles = maxCycles == null
           ? null
@@ -708,6 +715,8 @@ class NotesRepository {
       if (active == null ||
           rest == null ||
           recurrence == ReminderRecurrence.none ||
+          (version == 3 && anchorAt == null) ||
+          (anchorAt != null && anchorAt.isAfter(nextFireAt)) ||
           (maxCycles != null && validMaxCycles == null) ||
           (endAt != null && validMaxCycles != null)) {
         throw const FormatException('Invalid cycle metadata.');
@@ -718,6 +727,7 @@ class NotesRepository {
         cycle: ReminderCycle(
           activeDuration: active,
           restDuration: rest,
+          anchorAt: anchorAt,
           endAt: endAt,
           maxCycles: validMaxCycles,
         ),
@@ -758,13 +768,17 @@ class NotesRepository {
           ? null
           : jsonEncode({'version': 1, 'interval': reminder.recurrenceInterval});
     }
+    final hasDistinctAnchor =
+        cycle.anchorAt?.isBefore(reminder.nextFireAt) ?? false;
     return jsonEncode({
-      'version': 2,
+      'version': hasDistinctAnchor ? 3 : 2,
       'frequency': reminder.recurrence.name,
       'interval': reminder.recurrenceInterval,
       'cycle': {
         'active': _encodeReminderDuration(cycle.activeDuration),
         'rest': _encodeReminderDuration(cycle.restDuration),
+        if (hasDistinctAnchor)
+          'anchorAt': cycle.anchorAt!.toUtc().toIso8601String(),
         if (cycle.maxCycles != null) 'maxCycles': cycle.maxCycles,
       },
     });

@@ -332,6 +332,43 @@ void main() {
     expect(stored.recurrenceJson, contains('"maxCycles":3'));
   });
 
+  test('persists a cycle anchor separately from the first alert', () async {
+    final anchorAt = DateTime.utc(2026, 8, 31, 22);
+    final firstAlertAt = DateTime.utc(2026, 9, 4, 22);
+    final noteId = await repository.createTextNote(
+      title: 'Anchored treatment week',
+      body: 'Start the reminders part way through this cycle',
+      reminder: NoteReminder(
+        nextFireAt: firstAlertAt,
+        recurrence: ReminderRecurrence.daily,
+        cycle: ReminderCycle(
+          anchorAt: anchorAt,
+          activeDuration: const ReminderDuration(
+            value: 1,
+            unit: ReminderDurationUnit.weeks,
+          ),
+          restDuration: const ReminderDuration(
+            value: 4,
+            unit: ReminderDurationUnit.weeks,
+          ),
+        ),
+      ),
+    );
+
+    final loaded = await repository.loadNoteForEditing(noteId);
+    final stored = await database.select(database.reminders).getSingle();
+
+    expect(
+      loaded?.reminder?.cycle?.anchorAt?.isAtSameMomentAs(anchorAt),
+      isTrue,
+    );
+    expect(stored.recurrenceJson, contains('"version":3'));
+    expect(
+      stored.recurrenceJson,
+      contains('"anchorAt":"2026-08-31T22:00:00.000Z"'),
+    );
+  });
+
   test('labels a completed finite cycle as ended', () async {
     await repository.createTextNote(
       title: 'Finished course',

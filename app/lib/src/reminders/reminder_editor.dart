@@ -39,6 +39,12 @@ Future<ReminderEditorSelection?> showReminderEditor(
   var restDuration =
       initialCycle?.restDuration ??
       const ReminderDuration(value: 1, unit: ReminderDurationUnit.weeks);
+  var cycleAnchorDate = reminderDateOnly(
+    initialCycle?.anchorAt ?? initialSelection,
+  );
+  var cycleAnchorFollowsStart =
+      initialCycle?.anchorAt == null ||
+      isSameReminderDate(cycleAnchorDate, selectedDate);
   var cycleEndMode = initialCycle?.endAt != null
       ? _CycleEndMode.date
       : initialCycle?.maxCycles != null
@@ -69,6 +75,10 @@ Future<ReminderEditorSelection?> showReminderEditor(
           cycleEndDate,
           selectedTime,
         );
+        final cycleAnchorAt = combineReminderDateAndTime(
+          cycleAnchorDate,
+          selectedTime,
+        );
         final cycleIsValid =
             !cycleEnabled ||
             cycleEndMode != _CycleEndMode.date ||
@@ -88,6 +98,12 @@ Future<ReminderEditorSelection?> showReminderEditor(
           final selectionNow = currentTime();
           setSheetState(() {
             selectedDate = reminderDateOnly(date);
+            if (cycleAnchorFollowsStart) {
+              cycleAnchorDate = selectedDate;
+            } else if (cycleAnchorDate.isAfter(selectedDate)) {
+              cycleAnchorDate = selectedDate;
+              cycleAnchorFollowsStart = true;
+            }
             if (cycleEndDate.isBefore(selectedDate)) {
               cycleEndDate = selectedDate;
             }
@@ -371,6 +387,41 @@ Future<ReminderEditorSelection?> showReminderEditor(
                                     : Column(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
+                                          ListTile(
+                                            contentPadding: EdgeInsets.zero,
+                                            leading: const Icon(
+                                              Icons.event_available_outlined,
+                                            ),
+                                            title: const Text('Cycle starts'),
+                                            subtitle: Text(
+                                              localizations.formatMediumDate(
+                                                cycleAnchorDate,
+                                              ),
+                                            ),
+                                            trailing: const Icon(
+                                              Icons.chevron_right_rounded,
+                                            ),
+                                            onTap: () async {
+                                              final selected =
+                                                  await _pickCycleAnchorDate(
+                                                    sheetContext,
+                                                    cycleAnchorDate,
+                                                    lastDate: selectedDate,
+                                                  );
+                                              if (selected != null &&
+                                                  sheetContext.mounted) {
+                                                setSheetState(() {
+                                                  cycleAnchorDate = selected;
+                                                  cycleAnchorFollowsStart =
+                                                      isSameReminderDate(
+                                                        selected,
+                                                        selectedDate,
+                                                      );
+                                                });
+                                              }
+                                            },
+                                          ),
+                                          const SizedBox(height: 8),
                                           _ReminderDurationField(
                                             label: 'Active for',
                                             duration: activeDuration,
@@ -509,6 +560,12 @@ Future<ReminderEditorSelection?> showReminderEditor(
                                       : ReminderCycle(
                                           activeDuration: activeDuration,
                                           restDuration: restDuration,
+                                          anchorAt:
+                                              cycleAnchorAt.isAtSameMomentAs(
+                                                selectedAt,
+                                              )
+                                              ? null
+                                              : cycleAnchorAt,
                                           endAt:
                                               cycleEndMode == _CycleEndMode.date
                                               ? cycleEndAt
@@ -793,6 +850,27 @@ Future<DateTime?> _pickCycleEndDate(
     initialDate: initialDate,
     firstDate: start,
     lastDate: lastDate,
+  );
+}
+
+Future<DateTime?> _pickCycleAnchorDate(
+  BuildContext context,
+  DateTime initial, {
+  required DateTime lastDate,
+}) {
+  final end = reminderDateOnly(lastDate);
+  final firstDate = DateTime(end.year - 100, end.month, end.day);
+  final initialDate = initial.isBefore(firstDate)
+      ? firstDate
+      : initial.isAfter(end)
+      ? end
+      : initial;
+  return showDatePicker(
+    context: context,
+    helpText: 'Choose cycle start date',
+    initialDate: initialDate,
+    firstDate: firstDate,
+    lastDate: end,
   );
 }
 

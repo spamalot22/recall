@@ -78,6 +78,7 @@ class ReminderCycle {
   const ReminderCycle({
     required this.activeDuration,
     required this.restDuration,
+    this.anchorAt,
     this.endAt,
     this.maxCycles,
   }) : assert(maxCycles == null || (maxCycles >= 1 && maxCycles <= 999)),
@@ -85,6 +86,7 @@ class ReminderCycle {
 
   final ReminderDuration activeDuration;
   final ReminderDuration restDuration;
+  final DateTime? anchorAt;
   final DateTime? endAt;
   final int? maxCycles;
 
@@ -95,13 +97,14 @@ class ReminderCycle {
     return other is ReminderCycle &&
         other.activeDuration == activeDuration &&
         other.restDuration == restDuration &&
+        other.anchorAt == anchorAt &&
         other.endAt == endAt &&
         other.maxCycles == maxCycles;
   }
 
   @override
   int get hashCode =>
-      Object.hash(activeDuration, restDuration, endAt, maxCycles);
+      Object.hash(activeDuration, restDuration, anchorAt, endAt, maxCycles);
 }
 
 class ReminderDuration {
@@ -246,10 +249,12 @@ List<DateTime> _cycledReminderOccurrencesAfter(
   required int count,
 }) {
   final occurrences = <DateTime>[];
-  var cycleStart = _ScheduleCursor(
-    reminder.nextFireAt,
-    reminder.nextFireAt.day,
-  );
+  final configuredAnchor = cycle.anchorAt;
+  final anchor =
+      configuredAnchor == null || configuredAnchor.isAfter(reminder.nextFireAt)
+      ? reminder.nextFireAt
+      : configuredAnchor;
+  var cycleStart = _ScheduleCursor(anchor, anchor.day);
   var cycleIndex = 0;
 
   while (occurrences.length < count) {
@@ -284,7 +289,9 @@ List<DateTime> _cycledReminderOccurrencesAfter(
         if (cycle.endAt case final endAt? when occurrence.isAfter(endAt)) {
           return occurrences;
         }
-        occurrences.add(occurrence);
+        if (!occurrence.isBefore(reminder.nextFireAt)) {
+          occurrences.add(occurrence);
+        }
         occurrenceIndex++;
       }
     }

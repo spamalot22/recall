@@ -277,6 +277,57 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('selects a cycle anchor before the first alert', (tester) async {
+    final now = DateTime(2026, 9, 4, 12);
+    ReminderEditorSelection? result;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                result = await showReminderEditor(
+                  context,
+                  initialAt: DateTime(2026, 9, 4, 22),
+                  initialRecurrence: ReminderRecurrence.daily,
+                  nowProvider: () => now,
+                );
+              },
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    final cycleToggle = find.text('Active/rest cycle');
+    await tester.ensureVisible(cycleToggle);
+    await tester.tap(cycleToggle);
+    await tester.pumpAndSettle();
+
+    final cycleStart = find.text('Cycle starts');
+    await tester.ensureVisible(cycleStart);
+    await tester.tap(cycleStart);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('31'));
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    final done = find.widgetWithText(FilledButton, 'Done');
+    await tester.ensureVisible(done);
+    await tester.tap(done);
+    await tester.pumpAndSettle();
+
+    expect(result?.at, DateTime(2026, 9, 4, 22));
+    expect(result?.cycle?.anchorAt, DateTime(2026, 8, 31, 22));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('limits an active/rest schedule by cycle count', (tester) async {
     final now = DateTime(2026, 9, 1, 8);
     ReminderEditorSelection? result;
