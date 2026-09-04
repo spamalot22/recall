@@ -254,8 +254,9 @@ List<DateTime> _cycledReminderOccurrencesAfter(
       configuredAnchor == null || configuredAnchor.isAfter(reminder.nextFireAt)
       ? reminder.nextFireAt
       : configuredAnchor;
-  var cycleStart = _ScheduleCursor(anchor, anchor.day);
-  var cycleIndex = 0;
+  final initialCycle = _cycleAtOrBefore(cycle, anchor, after);
+  var cycleStart = initialCycle.cursor;
+  var cycleIndex = initialCycle.index;
 
   while (occurrences.length < count) {
     if (cycle.maxCycles case final maxCycles? when cycleIndex >= maxCycles) {
@@ -304,6 +305,47 @@ List<DateTime> _cycledReminderOccurrencesAfter(
     cycleIndex++;
   }
   return occurrences;
+}
+
+({int index, _ScheduleCursor cursor}) _cycleAtOrBefore(
+  ReminderCycle cycle,
+  DateTime anchor,
+  DateTime after,
+) {
+  final start = _ScheduleCursor(anchor, anchor.day);
+  if (!after.isAfter(anchor)) {
+    return (index: 0, cursor: start);
+  }
+
+  final activeUnit = cycle.activeDuration.unit;
+  final restUnit = cycle.restDuration.unit;
+  if (activeUnit != ReminderDurationUnit.months &&
+      restUnit != ReminderDurationUnit.months) {
+    final cycleDays =
+        _durationInDays(cycle.activeDuration) +
+        _durationInDays(cycle.restDuration);
+    final index = _calendarDayDifference(anchor, after) ~/ cycleDays;
+    return (index: index, cursor: start._addDays(index * cycleDays));
+  }
+
+  if (activeUnit == ReminderDurationUnit.months &&
+      restUnit == ReminderDurationUnit.months) {
+    final cycleMonths = cycle.activeDuration.value + cycle.restDuration.value;
+    final index = _monthDifference(anchor, after) ~/ cycleMonths;
+    return (index: index, cursor: start._addMonths(index * cycleMonths));
+  }
+
+  return (index: 0, cursor: start);
+}
+
+int _durationInDays(ReminderDuration duration) {
+  return switch (duration.unit) {
+    ReminderDurationUnit.days => duration.value,
+    ReminderDurationUnit.weeks => duration.value * 7,
+    ReminderDurationUnit.months => throw ArgumentError(
+      'Month durations do not have a fixed number of days.',
+    ),
+  };
 }
 
 int _firstReminderOccurrenceIndex(

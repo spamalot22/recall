@@ -49,6 +49,7 @@ class SyncService {
 
   static const _maxResponseBytes = 1024 * 1024;
   static const _maxEncryptedPayloadLength = 700000;
+  static const _syncProtocolVersion = 2;
   static final _uuidPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
   );
@@ -107,6 +108,9 @@ class SyncService {
     }
     StoredSession session = storedSession;
 
+    if (await _hasAnchoredReminderRules()) {
+      session = await _ensureAnchoredReminderSyncSupport(session);
+    }
     await _queueChangedNotes(session);
     // Capture this before push acknowledgements advance individual revisions,
     // otherwise older records from another device could be skipped.
@@ -130,6 +134,7 @@ class SyncService {
         method: 'POST',
         path: '/sync/push',
         body: {
+          'protocolVersion': _syncProtocolVersion,
           'records': pending
               .map(
                 (record) => {
@@ -197,7 +202,11 @@ class SyncService {
         session: session,
         method: 'POST',
         path: '/sync/pull',
-        body: {'afterServerRevision': cursor, 'limit': 250},
+        body: {
+          'protocolVersion': _syncProtocolVersion,
+          'afterServerRevision': cursor,
+          'limit': 250,
+        },
       );
       session = await _accountStore.readSession() ?? session;
       final records = response['records'];
@@ -262,6 +271,7 @@ class SyncService {
             id: noteId,
             recordType: 'tombstone',
             encryptedPayload: encryptedPayload,
+            payloadVersion: const Value(1),
             clientRevision: (existing?.clientRevision ?? 0) + 1,
             serverRevision: Value(existing?.serverRevision),
             hasLocalChanges: const Value(true),
@@ -283,15 +293,6 @@ class SyncService {
                 ..where((record) => record.id.equals(note.id))
                 ..limit(1))
               .getSingleOrNull();
-      if (existing != null && !note.updatedAt.isAfter(existing.updatedAt)) {
-        continue;
-      }
-
-      final checklistItems =
-          await (_database.select(_database.checklistItems)
-                ..where((item) => item.noteId.equals(note.id))
-                ..orderBy([(item) => OrderingTerm(expression: item.sortOrder)]))
-              .get();
       final reminders =
           await (_database.select(_database.reminders)
                 ..where((reminder) => reminder.noteId.equals(note.id))
@@ -299,6 +300,18 @@ class SyncService {
                   (reminder) => OrderingTerm(expression: reminder.createdAt),
                 ])
                 ..limit(1))
+              .get();
+      final payloadVersion = _notePayloadVersion(reminders.firstOrNull);
+      if (existing != null &&
+          !note.updatedAt.isAfter(existing.updatedAt) &&
+          existing.payloadVersion >= payloadVersion) {
+        continue;
+      }
+
+      final checklistItems =
+          await (_database.select(_database.checklistItems)
+                ..where((item) => item.noteId.equals(note.id))
+                ..orderBy([(item) => OrderingTerm(expression: item.sortOrder)]))
               .get();
       final now = DateTime.now().toUtc();
       final encryptedPayload = await _cipher.encryptJson(
@@ -343,6 +356,7 @@ class SyncService {
               id: note.id,
               recordType: 'note',
               encryptedPayload: encryptedPayload,
+              payloadVersion: Value(payloadVersion),
               clientRevision: (existing?.clientRevision ?? 0) + 1,
               serverRevision: Value(existing?.serverRevision),
               hasLocalChanges: const Value(true),
@@ -369,6 +383,47 @@ class SyncService {
     };
   }
 
+  int _notePayloadVersion(Reminder? reminder) {
+    final encoded = reminder?.recurrenceJson;
+    if (encoded == null) {
+      return 1;
+    }
+    try {
+      final rule = jsonDecode(encoded);
+      return rule is Map && rule['version'] == 3 ? 2 : 1;
+    } on FormatException {
+      return 1;
+    }
+  }
+
+  Future<bool> _hasAnchoredReminderRules() async {
+    final reminders = await _database.select(_database.reminders).get();
+    return reminders.any((reminder) => _notePayloadVersion(reminder) == 2);
+  }
+
+  Future<StoredSession> _ensureAnchoredReminderSyncSupport(
+    StoredSession session,
+  ) async {
+    final response = await _requestJson(
+      session: session,
+      method: 'POST',
+      path: '/sync/capabilities',
+      body: {'protocolVersion': _syncProtocolVersion},
+      failureMessage:
+          'Update the Recall backup server before syncing anchored reminders.',
+    );
+    final protocolVersion = response['protocolVersion'];
+    final payloadVersions = response['payloadVersions'];
+    if (protocolVersion != _syncProtocolVersion ||
+        payloadVersions is! List ||
+        !payloadVersions.contains(2)) {
+      throw const SyncException(
+        'Update the Recall backup server before syncing anchored reminders.',
+      );
+    }
+    return await _accountStore.readSession() ?? session;
+  }
+
   Future<bool> _applyRemoteRecord(
     StoredSession session,
     Map<String, Object?> record,
@@ -385,7 +440,8 @@ class SyncService {
         encryptedPayload.length > _maxEncryptedPayloadLength ||
         serverRevision is! int ||
         serverRevision < 1 ||
-        payloadVersion != 1 ||
+        payloadVersion is! int ||
+        (payloadVersion != 1 && payloadVersion != 2) ||
         type is! String ||
         (type != 'note' && type != 'tombstone') ||
         (conflictOfRecordId != null && conflictOfRecordId is! String)) {
@@ -400,6 +456,9 @@ class SyncService {
     if (payload['schema'] != 1) {
       throw const SyncException('Encrypted note record is invalid.');
     }
+    if (payloadVersion == 2 && !_hasVersionThreeReminder(payload)) {
+      throw const SyncException('Encrypted note record is invalid.');
+    }
 
     final isConflictCopy = conflictOfRecordId is String;
     if (isConflictCopy) {
@@ -410,6 +469,7 @@ class SyncService {
         id: id,
         type: type,
         encryptedPayload: encryptedPayload,
+        payloadVersion: payloadVersion,
         serverRevision: serverRevision,
         conflictOfRecordId: conflictOfRecordId,
         deletedAt: _dateOrNull(record['deletedAt']),
@@ -444,6 +504,7 @@ class SyncService {
       id: id,
       type: type,
       encryptedPayload: encryptedPayload,
+      payloadVersion: payloadVersion,
       serverRevision: serverRevision,
       deletedAt: _dateOrNull(record['deletedAt']),
       existing: localRecord,
@@ -451,10 +512,28 @@ class SyncService {
     return true;
   }
 
+  bool _hasVersionThreeReminder(Map<String, Object?> payload) {
+    final rawReminder = payload['reminder'];
+    if (rawReminder is! Map) {
+      return false;
+    }
+    final recurrenceJson = rawReminder['recurrenceJson'];
+    if (recurrenceJson is! String) {
+      return false;
+    }
+    try {
+      final rule = jsonDecode(recurrenceJson);
+      return rule is Map && rule['version'] == 3;
+    } on FormatException {
+      return false;
+    }
+  }
+
   Future<void> _storeRemoteRecord({
     required String id,
     required String type,
     required String encryptedPayload,
+    required int payloadVersion,
     required int serverRevision,
     String? conflictOfRecordId,
     DateTime? deletedAt,
@@ -468,6 +547,7 @@ class SyncService {
             id: id,
             recordType: type,
             encryptedPayload: encryptedPayload,
+            payloadVersion: Value(payloadVersion),
             clientRevision: existing?.clientRevision ?? 0,
             serverRevision: Value(serverRevision),
             hasLocalChanges: const Value(false),
@@ -671,6 +751,7 @@ class SyncService {
     required String path,
     required Map<String, Object?> body,
     bool retried = false,
+    String failureMessage = 'Could not sync with Recall backup.',
   }) async {
     final uri = Uri.parse(session.account.serverUrl).resolve(path);
     final request = await _httpClient.openUrl(method, uri);
@@ -694,13 +775,14 @@ class SyncService {
         path: path,
         body: body,
         retried: true,
+        failureMessage: failureMessage,
       );
     }
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         decoded is! Map) {
       throw SyncException(
-        'Could not sync with Recall backup.',
+        failureMessage,
         retryable:
             response.statusCode == HttpStatus.tooManyRequests ||
             response.statusCode >= 500,

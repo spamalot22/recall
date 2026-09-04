@@ -2154,4 +2154,7 @@ class _NoopBackgroundWorkScheduler implements BackgroundWorkScheduler {
 
   @override
   Future<void> schedulePeriodic(Duration interval) async {}
+
+  @override
+  Future<void> scheduleReminderMaintenance() async {}
 }

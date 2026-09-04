@@ -2845,6 +2845,13 @@ Future<void> _syncQuietly(WidgetRef ref) async {
 
 Future<void> _configureBackgroundSyncQuietly(WidgetRef ref) async {
   try {
+    await ref
+        .read(backgroundSyncControllerProvider)
+        .ensureReminderMaintenance();
+  } on Object {
+    // Foreground reconciliation remains available if maintenance cannot start.
+  }
+  try {
     await ref.read(backgroundSyncControllerProvider).refreshSchedule();
   } on Object {
     // Foreground and manual sync remain available if scheduling fails.

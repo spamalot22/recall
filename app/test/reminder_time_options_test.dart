@@ -386,6 +386,50 @@ void main() {
     expect(result?.cycle?.endAt, isNull);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('does not save an active/rest schedule with no future alerts', (
+    tester,
+  ) async {
+    final now = DateTime(2026, 9, 4, 12);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () => showReminderEditor(
+                context,
+                initialAt: DateTime(2020, 1, 1, 9),
+                initialRecurrence: ReminderRecurrence.daily,
+                initialCycle: const ReminderCycle(
+                  activeDuration: ReminderDuration(
+                    value: 1,
+                    unit: ReminderDurationUnit.days,
+                  ),
+                  restDuration: ReminderDuration(
+                    value: 1,
+                    unit: ReminderDurationUnit.days,
+                  ),
+                  maxCycles: 1,
+                ),
+                nowProvider: () => now,
+              ),
+              child: const Text('Open reminder'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open reminder'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This schedule has no future alerts.'), findsOneWidget);
+    final done = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Done'),
+    );
+    expect(done.onPressed, isNull);
+  });
 }
 
 List<String> _labels(List<ReminderTimePreset> presets) {

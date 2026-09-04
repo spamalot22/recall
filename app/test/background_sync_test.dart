@@ -5,7 +5,9 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/account/secure_account_store.dart';
 import 'package:recall_app/src/data/local_database.dart';
+import 'package:recall_app/src/notes/note_models.dart';
 import 'package:recall_app/src/notes/notes_repository.dart';
+import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 import 'package:recall_app/src/sync/automatic_sync_network_policy.dart';
 import 'package:recall_app/src/sync/background_sync.dart';
 import 'package:recall_app/src/sync/sync_execution_lock.dart';
@@ -110,6 +112,24 @@ void main() {
     );
     expect(scheduler.cancelCount, 1);
   });
+
+  test(
+    'controller schedules reminder maintenance without an account',
+    () async {
+      final scheduler = _RecordingBackgroundWorkScheduler();
+      final controller = BackgroundSyncController(
+        settingsStore: BackgroundSyncSettingsStore(
+          storage: _MemoryBackgroundSyncStorage(),
+        ),
+        scheduler: scheduler,
+        accountStore: _FakeAccountStore(connected: false),
+      );
+
+      await controller.ensureReminderMaintenance();
+
+      expect(scheduler.reminderMaintenanceCount, 1);
+    },
+  );
 
   test(
     'controller only enqueues fallback work for connected accounts',
@@ -234,6 +254,21 @@ void main() {
 
     expect(succeeded, isFalse);
   });
+
+  test('reminder maintenance reconciles without backup connectivity', () async {
+    final database = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    final scheduler = _RecordingReminderScheduler();
+
+    final succeeded = await runReminderMaintenanceTask(
+      database: database,
+      scheduler: scheduler,
+    );
+
+    expect(succeeded, isTrue);
+    expect(scheduler.reconcileCount, 1);
+    expect(scheduler.lastRequestPermissions, isFalse);
+  });
 }
 
 class _MemoryBackgroundSyncStorage implements BackgroundSyncStorage {
@@ -252,6 +287,7 @@ class _RecordingBackgroundWorkScheduler implements BackgroundWorkScheduler {
   final List<Duration> periodicIntervals = [];
   int oneOffCount = 0;
   int cancelCount = 0;
+  int reminderMaintenanceCount = 0;
   bool failPeriodicScheduling = false;
   bool failNextPeriodicScheduling = false;
 
@@ -262,6 +298,11 @@ class _RecordingBackgroundWorkScheduler implements BackgroundWorkScheduler {
       throw StateError('Scheduling failed');
     }
     periodicIntervals.add(interval);
+  }
+
+  @override
+  Future<void> scheduleReminderMaintenance() async {
+    reminderMaintenanceCount++;
   }
 
   @override
@@ -276,6 +317,23 @@ class _RecordingBackgroundWorkScheduler implements BackgroundWorkScheduler {
   Future<void> cancel() async {
     cancelCount++;
   }
+}
+
+class _RecordingReminderScheduler extends ReminderScheduler {
+  int reconcileCount = 0;
+  bool? lastRequestPermissions;
+
+  @override
+  Future<void> reconcileNoteReminders(
+    List<ScheduledNoteReminder> schedules, {
+    bool requestPermissions = true,
+  }) async {
+    reconcileCount++;
+    lastRequestPermissions = requestPermissions;
+  }
+
+  @override
+  void dispose() {}
 }
 
 class _FailingBackgroundSyncStorage implements BackgroundSyncStorage {

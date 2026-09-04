@@ -79,14 +79,34 @@ Future<ReminderEditorSelection?> showReminderEditor(
           cycleAnchorDate,
           selectedTime,
         );
+        final selectedCycle =
+            recurrence == ReminderRecurrence.none || !cycleEnabled
+            ? null
+            : ReminderCycle(
+                activeDuration: activeDuration,
+                restDuration: restDuration,
+                anchorAt: cycleAnchorAt.isAtSameMomentAs(selectedAt)
+                    ? null
+                    : cycleAnchorAt,
+                endAt: cycleEndMode == _CycleEndMode.date ? cycleEndAt : null,
+                maxCycles: cycleEndMode == _CycleEndMode.cycles
+                    ? maxCycles
+                    : null,
+              );
         final cycleIsValid =
             !cycleEnabled ||
             cycleEndMode != _CycleEndMode.date ||
             !cycleEndAt.isBefore(selectedAt);
-        final isValid =
-            (recurrence != ReminderRecurrence.none ||
-                selectedAt.isAfter(now)) &&
-            cycleIsValid;
+        final hasFutureOccurrence = recurrence == ReminderRecurrence.none
+            ? selectedAt.isAfter(now)
+            : NoteReminder(
+                    nextFireAt: selectedAt,
+                    recurrence: recurrence,
+                    recurrenceInterval: recurrenceInterval,
+                    cycle: selectedCycle,
+                  ).nextOccurrenceAfter(now) !=
+                  null;
+        final isValid = cycleIsValid && hasFutureOccurrence;
         final theme = Theme.of(sheetContext);
         final localizations = MaterialLocalizations.of(sheetContext);
         final textTheme = theme.textTheme;
@@ -133,6 +153,15 @@ Future<ReminderEditorSelection?> showReminderEditor(
                     style: textTheme.titleLarge,
                   ),
                   const SizedBox(height: 20),
+                  if (cycleIsValid && !hasFutureOccurrence) ...[
+                    Text(
+                      'This schedule has no future alerts.',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Row(
                     children: [
                       Text(
@@ -553,29 +582,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
                                   selectedAt,
                                   recurrence,
                                   recurrenceInterval: recurrenceInterval,
-                                  cycle:
-                                      recurrence == ReminderRecurrence.none ||
-                                          !cycleEnabled
-                                      ? null
-                                      : ReminderCycle(
-                                          activeDuration: activeDuration,
-                                          restDuration: restDuration,
-                                          anchorAt:
-                                              cycleAnchorAt.isAtSameMomentAs(
-                                                selectedAt,
-                                              )
-                                              ? null
-                                              : cycleAnchorAt,
-                                          endAt:
-                                              cycleEndMode == _CycleEndMode.date
-                                              ? cycleEndAt
-                                              : null,
-                                          maxCycles:
-                                              cycleEndMode ==
-                                                  _CycleEndMode.cycles
-                                              ? maxCycles
-                                              : null,
-                                        ),
+                                  cycle: selectedCycle,
                                 ),
                               )
                             : null,

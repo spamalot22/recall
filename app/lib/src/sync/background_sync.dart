@@ -13,9 +13,12 @@ import 'automatic_sync_network_policy.dart';
 import 'sync_service.dart';
 
 const backgroundSyncTaskName = 'recall.backgroundSync';
+const reminderMaintenanceTaskName = 'recall.reminderMaintenance';
 const _periodicWorkName = 'recall.periodicSync';
 const _oneOffWorkName = 'recall.pendingSync';
 const _workTag = 'recall.sync';
+const _reminderMaintenanceWorkName = 'recall.reminderMaintenance.periodic';
+const _reminderMaintenanceTag = 'recall.reminders';
 
 const backgroundSyncIntervals = [
   Duration(minutes: 15),
@@ -168,6 +171,8 @@ class BackgroundSyncSettingsStore {
 abstract class BackgroundWorkScheduler {
   Future<void> schedulePeriodic(Duration interval);
 
+  Future<void> scheduleReminderMaintenance();
+
   Future<void> enqueueOneOff();
 
   Future<void> cancelOneOff();
@@ -199,6 +204,22 @@ class WorkmanagerBackgroundWorkScheduler implements BackgroundWorkScheduler {
       backoffPolicy: BackoffPolicy.exponential,
       backoffPolicyDelay: const Duration(minutes: 15),
       tag: _workTag,
+    );
+  }
+
+  @override
+  Future<void> scheduleReminderMaintenance() async {
+    await initializeBackgroundSync();
+    await _workmanager.registerPeriodicTask(
+      _reminderMaintenanceWorkName,
+      reminderMaintenanceTaskName,
+      frequency: const Duration(hours: 24),
+      initialDelay: const Duration(hours: 24),
+      constraints: Constraints(requiresStorageNotLow: true),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 15),
+      tag: _reminderMaintenanceTag,
     );
   }
 
@@ -240,6 +261,9 @@ class DisabledBackgroundWorkScheduler implements BackgroundWorkScheduler {
   Future<void> schedulePeriodic(Duration interval) async {}
 
   @override
+  Future<void> scheduleReminderMaintenance() async {}
+
+  @override
   Future<void> enqueueOneOff() async {}
 
   @override
@@ -267,6 +291,9 @@ class BackgroundSyncController {
   final SecureAccountStore _accountStore;
 
   Future<BackgroundSyncSettings> loadSettings() => _settingsStore.read();
+
+  Future<void> ensureReminderMaintenance() =>
+      _scheduler.scheduleReminderMaintenance();
 
   Future<BackgroundSyncSettings> updateSettings({
     required bool enabled,
@@ -342,11 +369,46 @@ Future<void> initializeBackgroundSync() {
 @pragma('vm:entry-point')
 void backgroundSyncCallbackDispatcher() {
   Workmanager().executeTask((taskName, _) async {
-    if (taskName != backgroundSyncTaskName) {
-      return true;
-    }
-    return runBackgroundSyncTask();
+    return switch (taskName) {
+      backgroundSyncTaskName => runBackgroundSyncTask(),
+      reminderMaintenanceTaskName => runReminderMaintenanceTask(),
+      _ => true,
+    };
   });
+}
+
+@visibleForTesting
+Future<bool> runReminderMaintenanceTask({
+  LocalDatabase? database,
+  ReminderScheduler? scheduler,
+  SecureAccountStore? accountStore,
+}) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final ownsDatabase = database == null;
+  final ownsScheduler = scheduler == null;
+  final accounts = accountStore ?? SecureAccountStore();
+  final localDatabase =
+      database ?? LocalDatabase(databaseKey: accounts.readOrCreateDatabaseKey);
+  final reminderScheduler = scheduler ?? ReminderScheduler();
+  try {
+    final reminders = await NotesRepository(
+      localDatabase,
+    ).loadScheduledReminders();
+    await reminderScheduler.reconcileNoteReminders(
+      reminders,
+      requestPermissions: false,
+    );
+    return true;
+  } on Object {
+    return false;
+  } finally {
+    if (ownsScheduler) {
+      reminderScheduler.dispose();
+    }
+    if (ownsDatabase) {
+      await localDatabase.close();
+    }
+  }
 }
 
 @visibleForTesting

@@ -184,6 +184,63 @@ void main() {
     );
   });
 
+  test('skips directly across old fixed-length cycles', () {
+    final recentAnchor = DateTime.utc(2026, 8, 31, 22);
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2026, 9, 4, 22),
+      recurrence: ReminderRecurrence.daily,
+      cycle: ReminderCycle(
+        anchorAt: recentAnchor.subtract(const Duration(days: 35 * 1000)),
+        activeDuration: const ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.weeks,
+        ),
+        restDuration: const ReminderDuration(
+          value: 4,
+          unit: ReminderDurationUnit.weeks,
+        ),
+      ),
+    );
+
+    final occurrences = reminderOccurrencesAfter(
+      reminder,
+      after: DateTime.utc(2026, 9, 4, 12),
+      count: 3,
+    );
+
+    expect(occurrences, [
+      DateTime.utc(2026, 9, 4, 22),
+      DateTime.utc(2026, 9, 5, 22),
+      DateTime.utc(2026, 9, 6, 22),
+    ]);
+  });
+
+  test('skips directly across old month-based cycles', () {
+    final reminder = NoteReminder(
+      nextFireAt: DateTime.utc(2000, 1, 31, 10),
+      recurrence: ReminderRecurrence.monthly,
+      cycle: const ReminderCycle(
+        activeDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.months,
+        ),
+        restDuration: ReminderDuration(
+          value: 1,
+          unit: ReminderDurationUnit.months,
+        ),
+      ),
+    );
+
+    expect(
+      reminderOccurrencesAfter(
+        reminder,
+        after: DateTime.utc(2026, 1, 1),
+        count: 2,
+      ),
+      [DateTime.utc(2026, 1, 31, 10), DateTime.utc(2026, 3, 31, 10)],
+    );
+  });
+
   test('frequency restarts at the beginning of each active period', () {
     final reminder = NoteReminder(
       nextFireAt: DateTime.utc(2026, 9, 7, 9),

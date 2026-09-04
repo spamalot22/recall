@@ -15,16 +15,32 @@ const encryptedRecordSchema = z.object({
   deletedAt: z.string().datetime().optional().nullable()
 });
 
-const pushSchema = z.object({
+export const syncProtocolVersion = 2;
+export const syncCapabilitiesSchema = z.object({
+  protocolVersion: z.literal(syncProtocolVersion)
+});
+
+export const pushSchema = z.object({
+  protocolVersion: z.literal(syncProtocolVersion),
   records: z.array(encryptedRecordSchema).min(1).max(250)
 });
 
-const pullSchema = z.object({
+export const pullSchema = z.object({
+  protocolVersion: z.literal(syncProtocolVersion),
   afterServerRevision: z.number().int().nonnegative().default(0),
   limit: z.number().int().min(1).max(500).default(250)
 });
 
 export async function syncRoutes(app: FastifyInstance) {
+  app.post(
+    "/sync/capabilities",
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      syncCapabilitiesSchema.parse(request.body);
+      return { protocolVersion: syncProtocolVersion, payloadVersions: [1, 2] };
+    }
+  );
+
   app.post("/sync/push", { preHandler: [app.authenticate] }, async (request) => {
     const input = pushSchema.parse(request.body);
     const userId = request.user.userId;
