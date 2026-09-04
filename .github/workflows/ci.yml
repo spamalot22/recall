@@ -31,7 +31,7 @@ jobs:
           npm ci
           npm run build
           npm test
-          npm audit --audit-level=moderate
+          node ../.github/scripts/npm-audit.mjs
       - name: Build production server image
         run: docker build --tag recall-server:ci server
       - name: Validate pull-only LAN Compose stack

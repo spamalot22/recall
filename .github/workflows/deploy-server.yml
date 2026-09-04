@@ -6,6 +6,12 @@ on:
   push:
     tags:
       - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Existing semantic version to publish
+        required: true
+        type: string
 
 jobs:
   build-push:
@@ -15,12 +21,22 @@ jobs:
       packages: write
     steps:
       - name: Validate release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          PUSH_TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$PUSH_TAG"
+          fi
           if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must be bare semantic versions like 1.1.1."
             exit 1
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -34,7 +50,7 @@ jobs:
           npm ci
           npm run build
           npm test
-          npm audit --audit-level=moderate
+          node ../.github/scripts/npm-audit.mjs
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -50,7 +66,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/recall-server
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.tag }}
             type=raw,value=latest
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7

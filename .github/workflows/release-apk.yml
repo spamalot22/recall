@@ -55,7 +55,7 @@ jobs:
           npm ci
           npm run build
           npm test
-          npm audit --audit-level=moderate
+          node ../.github/scripts/npm-audit.mjs
 
   android:
     needs: [version, server-check]
