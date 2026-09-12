@@ -34,7 +34,7 @@
     "esbuild": "^0.28.2",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
-    "vitest": "^4.0.14"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "fast-uri": "^3.1.6",
