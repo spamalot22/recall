@@ -1,5 +1,12 @@
 # Recall Agent Instructions
 
+## Git Workflow
+
+- Commit and push changes directly to `main`; do not create pull requests unless
+  the user explicitly requests one.
+- Keep GitHub Actions validation and dependency-audit gates enabled. Direct pushes
+  do not imply permission to disable repository protections or force-push history.
+
 ## Resource-Constrained Host
 
 This checkout runs on a resource-constrained remote server. Heavy local builds
