@@ -92,6 +92,7 @@ class ReminderScheduler {
       StreamController<String>.broadcast();
 
   Future<void>? _initialization;
+  bool _hasLocalTimezone = false;
 
   Stream<String> get openNoteRequests => _openNoteRequests.stream;
 
@@ -270,7 +271,8 @@ class ReminderScheduler {
 
   bool _usesRollingOccurrences(NoteReminder reminder) {
     return reminder.repeats &&
-        (reminder.cycle != null ||
+        (!_hasLocalTimezone ||
+            reminder.cycle != null ||
             reminder.recurrenceInterval > 1 ||
             reminder.recurrence == ReminderRecurrence.monthly ||
             reminder.recurrence == ReminderRecurrence.yearly);
@@ -287,13 +289,12 @@ class ReminderScheduler {
   }
 
   Future<void> _initialize() async {
-    timezone_data.initializeTimeZones();
-    await _setLocalTimezone();
-
     const initializationSettings = InitializationSettings(
       android: AndroidInitializationSettings('ic_notification'),
     );
     try {
+      timezone_data.initializeTimeZones();
+      await _setLocalTimezone();
       await _notifications.initialize(
         settings: initializationSettings,
         onDidReceiveNotificationResponse: _handleNotificationResponse,
@@ -327,6 +328,8 @@ class ReminderScheduler {
   }
 
   Future<void> _setLocalTimezone() async {
+    _hasLocalTimezone = false;
+    tz.setLocalLocation(tz.UTC);
     try {
       final timezoneName = await _deviceChannel.invokeMethod<String>(
         'localTimezone',
@@ -336,9 +339,10 @@ class ReminderScheduler {
       }
 
       tz.setLocalLocation(tz.getLocation(timezoneName));
+      _hasLocalTimezone = true;
     } on Object {
-      // UTC fallback is still schedulable. Android devices should return an
-      // IANA timezone through the platform channel in normal app runs.
+      // Background engines have no Activity channel. Use exact UTC instants
+      // for rolling occurrences computed with Dart's device-local calendar.
     }
   }
 
@@ -401,14 +405,7 @@ class ReminderScheduler {
   }
 
   tz.TZDateTime _toScheduledDate(DateTime dateTime) {
-    final localDateTime = dateTime.toLocal();
-    return tz.TZDateTime.local(
-      localDateTime.year,
-      localDateTime.month,
-      localDateTime.day,
-      localDateTime.hour,
-      localDateTime.minute,
-    );
+    return tz.TZDateTime.from(dateTime, tz.local);
   }
 
   DateTimeComponents? _matchComponentsFor(ReminderRecurrence recurrence) {

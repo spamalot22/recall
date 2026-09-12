@@ -10,6 +10,63 @@ import 'package:recall_app/src/reminders/reminder_scheduler.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test(
+    'background timezone fallback preserves instants and schedules rolling alarms',
+    () async {
+      AndroidFlutterLocalNotificationsPlugin.registerWith();
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      const notificationsChannel = MethodChannel(
+        'dexterous.com/flutter/local_notifications',
+      );
+      const deviceChannel = MethodChannel('app.recall.notes/device');
+      final calls = <MethodCall>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(notificationsChannel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'initialize' => true,
+          'canScheduleExactNotifications' => true,
+          _ => null,
+        };
+      });
+      messenger.setMockMethodCallHandler(deviceChannel, null);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        messenger.setMockMethodCallHandler(notificationsChannel, null);
+      });
+      final scheduler = ReminderScheduler();
+      addTearDown(scheduler.dispose);
+      final tomorrow = DateTime.now().toUtc().add(const Duration(days: 1));
+      final start = DateTime.utc(
+        tomorrow.year,
+        tomorrow.month,
+        tomorrow.day,
+        12,
+        30,
+        37,
+      );
+      await scheduler.scheduleNoteReminder(
+        noteId: 'background-note',
+        title: '',
+        body: 'Reminder',
+        reminder: NoteReminder(
+          nextFireAt: start,
+          recurrence: ReminderRecurrence.daily,
+        ),
+        requestPermissions: false,
+      );
+      final scheduled = calls
+          .where((call) => call.method == 'zonedSchedule')
+          .toList();
+      expect(scheduled, hasLength(24));
+      final args = scheduled.first.arguments as Map<Object?, Object?>;
+      expect(args['timeZoneName'], 'Etc/UTC');
+      expect(DateTime.parse('${args['scheduledDateTime']}Z'), start);
+      expect(args.containsKey('matchDateTimeComponents'), isFalse);
+    },
+  );
+
   test('initializes Android notifications with a bare drawable name', () async {
     AndroidFlutterLocalNotificationsPlugin.registerWith();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;

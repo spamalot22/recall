@@ -75,6 +75,21 @@ void main() {
       );
     });
 
+    test('a past recurring anchor does not make a distant reminder urgent', () {
+      expect(
+        automaticMoodForNote(
+          title: 'Check meter',
+          body: '',
+          reminder: NoteReminder(
+            nextFireAt: DateTime(2026, 8, 1, 9),
+            recurrence: ReminderRecurrence.monthly,
+          ),
+          now: DateTime(2026, 9, 6, 9),
+        ),
+        ColorMood.routine,
+      );
+    });
+
     test('does not treat a casual date word as urgent by itself', () {
       expect(
         automaticMoodForNote(

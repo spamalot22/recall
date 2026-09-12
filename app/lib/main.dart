@@ -177,6 +177,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       _openNoteFromNotification,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       if (!ref.read(backgroundStartupEnabledProvider)) {
         return;
       }
@@ -548,7 +549,8 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
 
     List<String>? reordered;
     if (_gridLayout && targetColumnAnchor != null) {
-      final sourceRect = _noteRects[sourceId]!;
+      final sourceRect = _noteRects[sourceId];
+      if (sourceRect == null) return;
       final layoutTop = _noteRects.values
           .map((rect) => rect.top)
           .reduce(math.min);
@@ -679,6 +681,16 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       return;
     }
 
+    final currentVisibleIds = allNotes
+        .where((note) => _dragVisibleIds.contains(note.id))
+        .map((note) => note.id)
+        .toSet();
+    if (currentVisibleIds.length != orderIds.length ||
+        !currentVisibleIds.containsAll(orderIds) ||
+        orderIds.toSet().length != orderIds.length) {
+      _cancelNoteDrag(sourceId);
+      return;
+    }
     var visibleIndex = 0;
     final reorderedIds = [
       for (final note in allNotes)
@@ -692,13 +704,14 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
       return;
     }
 
+    final sync = _captureQuietSync(ref);
     try {
       await ref.read(notesRepositoryProvider).reorderNotes(reorderedIds);
       if (mounted && _draggedNoteId == sourceId) {
         _clearNoteDrag();
       }
       unawaited(HapticFeedback.mediumImpact());
-      unawaited(_syncQuietly(ref));
+      unawaited(sync());
     } on Object {
       if (mounted && _draggedNoteId == sourceId) {
         _cancelNoteDrag(sourceId);
@@ -748,6 +761,7 @@ class _RecallHomePageState extends ConsumerState<RecallHomePage>
     if (_gridLayout == gridLayout) {
       return;
     }
+    _clearNoteDrag();
     _notePositions.clear();
     _noteRects.clear();
     setState(() => _gridLayout = gridLayout);
@@ -1802,11 +1816,12 @@ Future<void> _showNoteCardActions(
 
   try {
     final repository = ref.read(notesRepositoryProvider);
+    final sync = _captureQuietSync(ref);
     switch (action) {
       case _NoteCardAction.pin:
         await repository.setPinned(note.id, !note.pinned);
         unawaited(HapticFeedback.selectionClick());
-        unawaited(_syncQuietly(ref));
+        unawaited(sync());
         if (context.mounted) {
           _showSnackBar(
             context,
@@ -1838,20 +1853,26 @@ Future<bool> _setArchivedWithFeedback(
   required bool archived,
 }) async {
   final repository = ref.read(notesRepositoryProvider);
+  final sync = _captureQuietSync(ref);
   try {
     await repository.setArchived(note.id, archived);
-    unawaited(_syncQuietly(ref));
+    unawaited(sync());
     if (context.mounted) {
       _showSnackBar(
         context,
         archived ? 'Note archived.' : 'Note restored.',
         actionLabel: 'Undo',
         onAction: () {
-          unawaited(
-            repository.setArchived(note.id, note.archived).then((_) {
-              return _syncQuietly(ref);
-            }),
-          );
+          unawaited(() async {
+            try {
+              await repository.setArchived(note.id, note.archived);
+              await sync();
+            } on Object {
+              if (context.mounted) {
+                _showSnackBar(context, 'Could not undo this change.');
+              }
+            }
+          }());
         },
       );
     }
@@ -1907,11 +1928,18 @@ class ChecklistPreview extends ConsumerWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(4),
               onTap: () async {
+                final sync = _captureQuietSync(ref);
                 unawaited(HapticFeedback.selectionClick());
-                await ref
-                    .read(notesRepositoryProvider)
-                    .toggleChecklistItem(noteId, index);
-                unawaited(_syncQuietly(ref));
+                try {
+                  await ref
+                      .read(notesRepositoryProvider)
+                      .toggleChecklistItem(noteId, index);
+                  unawaited(sync());
+                } on Object {
+                  if (context.mounted) {
+                    _showSnackBar(context, 'Could not update this item.');
+                  }
+                }
               },
               child: Row(
                 children: [
@@ -1989,23 +2017,31 @@ Future<void> _confirmMoveNoteToTrash(
   if (shouldDelete != true || !context.mounted) {
     return;
   }
-  await ref.read(notesRepositoryProvider).moveNoteToTrash(note.id);
-  await ref.read(reminderSchedulerProvider).cancelNoteReminder(note.id);
-  unawaited(_syncQuietly(ref));
+  final repository = ref.read(notesRepositoryProvider);
+  final scheduler = ref.read(reminderSchedulerProvider);
+  final sync = _captureQuietSync(ref);
+  await repository.moveNoteToTrash(note.id);
+  try {
+    await scheduler.cancelNoteReminder(note.id);
+  } finally {
+    unawaited(sync());
+  }
   if (context.mounted) {
     _showSnackBar(
       context,
       'Note moved to trash.',
       actionLabel: 'Undo',
       onAction: () {
-        unawaited(
-          ref.read(notesRepositoryProvider).restoreNote(note.id).then((
-            _,
-          ) async {
-            await _reconcileRemindersQuietly(ref);
-            await _syncQuietly(ref);
-          }),
-        );
+        unawaited(() async {
+          try {
+            await repository.restoreNote(note.id);
+            await sync();
+          } on Object {
+            if (context.mounted) {
+              _showSnackBar(context, 'Could not restore this note.');
+            }
+          }
+        }());
       },
     );
   }
@@ -2733,10 +2769,15 @@ class _TrashNoteTile extends ConsumerWidget {
             tooltip: 'Restore',
             icon: const Icon(Icons.restore_from_trash_outlined),
             onPressed: () async {
-              await ref.read(notesRepositoryProvider).restoreNote(note.id);
-              unawaited(_syncQuietly(ref));
-              if (context.mounted) {
-                _showSnackBar(context, 'Note restored.');
+              final sync = _captureQuietSync(ref);
+              try {
+                await ref.read(notesRepositoryProvider).restoreNote(note.id);
+                unawaited(sync());
+                if (context.mounted) _showSnackBar(context, 'Note restored.');
+              } on Object {
+                if (context.mounted) {
+                  _showSnackBar(context, 'Could not restore this note.');
+                }
               }
             },
           ),
@@ -2775,11 +2816,19 @@ Future<void> _confirmPermanentDelete(
       ],
     ),
   );
-  if (confirmed == true) {
-    await ref.read(reminderSchedulerProvider).cancelNoteReminder(note.id);
-    await ref.read(syncServiceProvider).queueDeletion(note.id);
-    await ref.read(notesRepositoryProvider).permanentlyDeleteNote(note.id);
-    unawaited(_syncQuietly(ref));
+  if (confirmed == true && context.mounted) {
+    final scheduler = ref.read(reminderSchedulerProvider);
+    final service = ref.read(syncServiceProvider);
+    final sync = _captureQuietSync(ref);
+    try {
+      await scheduler.cancelNoteReminder(note.id);
+      await service.permanentlyDeleteNote(note.id);
+      unawaited(sync());
+    } on Object {
+      if (context.mounted) {
+        _showSnackBar(context, 'Could not permanently delete this note.');
+      }
+    }
   }
 }
 
@@ -2819,28 +2868,32 @@ Future<void> _runSync(BuildContext context, WidgetRef ref) async {
   }
 }
 
-Future<void> _syncQuietly(WidgetRef ref) async {
-  await _enqueueBackgroundSyncQuietly(ref);
-  try {
-    final session = await ref.read(storedSessionProvider.future);
-    if (session == null ||
-        !await ref
-            .read(automaticSyncNetworkPolicyProvider)
-            .shouldAttempt(session.account.serverUrl)) {
-      return;
+Future<void> _syncQuietly(WidgetRef ref) => _captureQuietSync(ref)();
+
+Future<void> Function() _captureQuietSync(WidgetRef ref) {
+  final service = ref.read(syncServiceProvider);
+  final repository = ref.read(notesRepositoryProvider);
+  final scheduler = ref.read(reminderSchedulerProvider);
+  final background = ref.read(backgroundSyncControllerProvider);
+  final diagnostics = ref.read(backgroundSyncSettingsStoreProvider);
+  final accounts = ref.read(secureAccountStoreProvider);
+  final policy = ref.read(automaticSyncNetworkPolicyProvider);
+  return () async {
+    try {
+      await background.enqueueOneOff();
+    } on Object {
+      // Foreground sync remains available when OS scheduling fails.
     }
-    final result = await _runTrackedSync(
-      ref.read(syncServiceProvider),
-      ref.read(backgroundSyncSettingsStoreProvider),
+    await _syncAndReconcileQuietly(
+      service,
+      repository,
+      scheduler,
+      background,
+      diagnostics,
+      accounts,
+      policy,
     );
-    if (result.connected) {
-      await _cancelPendingBackgroundSyncQuietly(ref);
-    }
-  } on Object {
-    // Local writes stay local-first. The explicit sync action exposes errors.
-  } finally {
-    await _reconcileRemindersQuietly(ref);
-  }
+  };
 }
 
 Future<void> _configureBackgroundSyncQuietly(WidgetRef ref) async {
@@ -2855,14 +2908,6 @@ Future<void> _configureBackgroundSyncQuietly(WidgetRef ref) async {
     await ref.read(backgroundSyncControllerProvider).refreshSchedule();
   } on Object {
     // Foreground and manual sync remain available if scheduling fails.
-  }
-}
-
-Future<void> _enqueueBackgroundSyncQuietly(WidgetRef ref) async {
-  try {
-    await ref.read(backgroundSyncControllerProvider).enqueueOneOff();
-  } on Object {
-    // The foreground sync attempt still proceeds.
   }
 }
 
@@ -3334,6 +3379,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   final _bodyFocusNode = FocusNode();
   final List<_ChecklistDraft> _checklistItems = [];
   DateTime? _reminderAt;
+  DateTime? _snoozeUntil;
+  DateTime? _originalReminderAt;
   ReminderRecurrence _recurrence = ReminderRecurrence.none;
   int _recurrenceInterval = 1;
   ReminderCycle? _reminderCycle;
@@ -3425,6 +3472,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     _replaceChecklistDrafts(note.checklistItems);
     setState(() {
       _reminderAt = note.reminder?.nextFireAt;
+      _originalReminderAt = _reminderAt;
+      _snoozeUntil = note.reminder?.snoozeUntil;
       _recurrence = note.reminder?.recurrence ?? ReminderRecurrence.none;
       _recurrenceInterval = note.reminder?.recurrenceInterval ?? 1;
       _reminderCycle = note.reminder?.cycle;
@@ -3500,7 +3549,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         : const Duration(milliseconds: 240);
 
     return PopScope<void>(
-      canPop: !_dirty || _saving,
+      canPop: !_dirty && !_saving,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) {
           unawaited(_save());
@@ -3512,6 +3561,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         appBar: AppBar(
           backgroundColor: moodColors.background,
           foregroundColor: moodColors.foreground,
+          leading: CloseButton(
+            onPressed: () {
+              if (unavailable) return;
+              if (_dirty) {
+                unawaited(_save());
+              } else {
+                Navigator.of(context).pop();
+              }
+            },
+          ),
           title: Text(_editing ? 'Edit note' : 'New note'),
           actions: [
             IconButton(
@@ -3907,6 +3966,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     }
     _updateDraft(() {
       _reminderAt = selection.at;
+      _snoozeUntil = null;
       _recurrence = selection.at == null
           ? ReminderRecurrence.none
           : selection.recurrence;
@@ -3922,6 +3982,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     unawaited(HapticFeedback.selectionClick());
     _updateDraft(() {
       _reminderAt = null;
+      _snoozeUntil = null;
       _recurrence = ReminderRecurrence.none;
       _recurrenceInterval = 1;
       _reminderCycle = null;
@@ -3981,6 +4042,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     final repository = ref.read(notesRepositoryProvider);
     final scheduler = ref.read(reminderSchedulerProvider);
     final syncService = ref.read(syncServiceProvider);
+    final backgroundSync = ref.read(backgroundSyncControllerProvider);
+    final diagnostics = ref.read(backgroundSyncSettingsStoreProvider);
+    final accountStore = ref.read(secureAccountStoreProvider);
+    final networkPolicy = ref.read(automaticSyncNetworkPolicyProvider);
     final messenger = ScaffoldMessenger.of(context);
     await repository.moveNoteToTrash(noteId);
     _dirty = false;
@@ -4012,19 +4077,13 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                     await repository.restoreNote(noteId);
                     final schedules = await repository.loadScheduledReminders();
                     await scheduler.reconcileNoteReminders(schedules);
-                    await _enqueueBackgroundSyncQuietly(ref);
+                    await backgroundSync.enqueueOneOff();
                     await _syncServiceQuietly(
                       syncService,
-                      accountStore: ref.read(secureAccountStoreProvider),
-                      networkPolicy: ref.read(
-                        automaticSyncNetworkPolicyProvider,
-                      ),
-                      backgroundSync: ref.read(
-                        backgroundSyncControllerProvider,
-                      ),
-                      diagnostics: ref.read(
-                        backgroundSyncSettingsStoreProvider,
-                      ),
+                      accountStore: accountStore,
+                      networkPolicy: networkPolicy,
+                      backgroundSync: backgroundSync,
+                      diagnostics: diagnostics,
                     );
                   } on Object {
                     // The local restore succeeds even when backup is offline.
@@ -4037,13 +4096,17 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       );
     unawaited(
       (() async {
-        await _enqueueBackgroundSyncQuietly(ref);
+        try {
+          await backgroundSync.enqueueOneOff();
+        } on Object {
+          // Foreground sync can still proceed if WorkManager is unavailable.
+        }
         await _syncServiceQuietly(
           syncService,
-          accountStore: ref.read(secureAccountStoreProvider),
-          networkPolicy: ref.read(automaticSyncNetworkPolicyProvider),
-          backgroundSync: ref.read(backgroundSyncControllerProvider),
-          diagnostics: ref.read(backgroundSyncSettingsStoreProvider),
+          accountStore: accountStore,
+          networkPolicy: networkPolicy,
+          backgroundSync: backgroundSync,
+          diagnostics: diagnostics,
         );
       })(),
     );
@@ -4071,6 +4134,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
               recurrence: _recurrence,
               recurrenceInterval: _recurrenceInterval,
               cycle: _reminderCycle,
+              snoozeUntil: _snoozeUntil,
             ),
     );
   }
@@ -4211,8 +4275,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     } on Object {
       // Removing the database record also removes its reminder definition.
     }
-    await ref.read(syncServiceProvider).queueDeletion(noteId);
-    await ref.read(notesRepositoryProvider).permanentlyDeleteNote(noteId);
+    await ref.read(syncServiceProvider).permanentlyDeleteNote(noteId);
     _persistedNoteId = null;
   }
 
@@ -4263,6 +4326,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   }
 
   Future<void> _save() async {
+    if (_saving || _loading || _discarding) return;
     _autosaveTimer?.cancel();
     _autosaveTimer = null;
     var draft = _captureDraft();
@@ -4289,6 +4353,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     final initialReminder = draft.reminder;
     if (initialReminder != null &&
         !initialReminder.repeats &&
+        initialReminder.nextFireAt != _originalReminderAt &&
         !initialReminder.nextFireAt.isAfter(DateTime.now())) {
       _showSnackBar(context, 'Choose a future reminder time.');
       return;
@@ -4304,6 +4369,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       final reminder = draft.reminder;
       if (reminder != null &&
           !reminder.repeats &&
+          reminder.nextFireAt != _originalReminderAt &&
           !reminder.nextFireAt.isAfter(DateTime.now())) {
         if (mounted) {
           _showSnackBar(context, 'Choose a future reminder time.');
@@ -4321,6 +4387,14 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
             body: draft.body,
             reminder: reminder,
           );
+          await scheduler.scheduleSnooze(
+            ScheduledNoteReminder(
+              noteId: noteId,
+              title: draft.title,
+              body: draft.body,
+              reminder: reminder,
+            ),
+          );
         }
         _hadReminder = reminder != null;
       } on ReminderPermissionException catch (error) {
@@ -4333,17 +4407,25 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       if (mounted) {
         _persistedRevision = _draftRevision;
         _dirty = false;
+        final backgroundSync = ref.read(backgroundSyncControllerProvider);
+        final diagnostics = ref.read(backgroundSyncSettingsStoreProvider);
+        final accountStore = ref.read(secureAccountStoreProvider);
+        final networkPolicy = ref.read(automaticSyncNetworkPolicyProvider);
         unawaited(
           (() async {
-            await _enqueueBackgroundSyncQuietly(ref);
+            try {
+              await backgroundSync.enqueueOneOff();
+            } on Object {
+              // Foreground sync can still proceed if WorkManager is unavailable.
+            }
             await _syncAndReconcileQuietly(
               syncService,
               repository,
               scheduler,
-              ref.read(backgroundSyncControllerProvider),
-              ref.read(backgroundSyncSettingsStoreProvider),
-              ref.read(secureAccountStoreProvider),
-              ref.read(automaticSyncNetworkPolicyProvider),
+              backgroundSync,
+              diagnostics,
+              accountStore,
+              networkPolicy,
             );
           })(),
         );

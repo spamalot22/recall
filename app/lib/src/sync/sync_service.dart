@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -49,6 +50,7 @@ class SyncService {
 
   static const _maxResponseBytes = 1024 * 1024;
   static const _maxEncryptedPayloadLength = 700000;
+  static const _maxPushBytes = 900000;
   static const _syncProtocolVersion = 2;
   static final _uuidPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
@@ -81,19 +83,21 @@ class SyncService {
 
   Future<int> pendingChangeCount() {
     return _executionLock.synchronized(() async {
-      if (await _accountStore.readSession() == null) {
+      final session = await _accountStore.readSession();
+      if (session == null) {
         return 0;
       }
       final records = await _database.select(_database.syncRecords).get();
       final recordsById = {for (final record in records) record.id: record};
       final pendingIds = {
+        ...await _database.pendingDeletionIds(),
         for (final record in records)
           if (record.hasLocalChanges) record.id,
       };
       final notes = await _database.select(_database.notes).get();
       for (final note in notes) {
         final record = recordsById[note.id];
-        if (record == null || note.updatedAt.isAfter(record.updatedAt)) {
+        if (await _noteHasChanged(note, record, session)) {
           pendingIds.add(note.id);
         }
       }
@@ -108,17 +112,20 @@ class SyncService {
     }
     StoredSession session = storedSession;
 
+    await _database.transaction(() async {
+      for (final id in await _database.pendingDeletionIds()) {
+        await queueDeletion(id);
+      }
+    });
     if (await _hasAnchoredReminderRules()) {
       session = await _ensureAnchoredReminderSyncSupport(session);
     }
     await _queueChangedNotes(session);
-    // Capture this before push acknowledgements advance individual revisions,
-    // otherwise older records from another device could be skipped.
-    var cursor = await _latestServerRevision();
+    var cursor = await _database.readPullRevision();
     var pushed = 0;
     var conflicts = 0;
     while (true) {
-      final pending =
+      final candidates =
           await (_database.select(_database.syncRecords)
                 ..where((record) => record.hasLocalChanges.equals(true))
                 ..orderBy([
@@ -126,6 +133,17 @@ class SyncService {
                 ])
                 ..limit(250))
               .get();
+      final pending = <SyncRecord>[];
+      var pushBytes = 64;
+      for (final record in candidates) {
+        final recordBytes =
+            utf8.encode(jsonEncode(_pushRecord(record))).length + 1;
+        if (pushBytes + recordBytes > _maxPushBytes) {
+          break;
+        }
+        pending.add(record);
+        pushBytes += recordBytes;
+      }
       if (pending.isEmpty) {
         break;
       }
@@ -135,21 +153,7 @@ class SyncService {
         path: '/sync/push',
         body: {
           'protocolVersion': _syncProtocolVersion,
-          'records': pending
-              .map(
-                (record) => {
-                  'id': record.id,
-                  'type': record.recordType,
-                  'encryptedPayload': record.encryptedPayload,
-                  'payloadVersion': record.payloadVersion,
-                  'clientRevision': record.clientRevision,
-                  if (record.serverRevision != null)
-                    'baseServerRevision': record.serverRevision,
-                  if (record.deletedAt != null)
-                    'deletedAt': record.deletedAt!.toUtc().toIso8601String(),
-                },
-              )
-              .toList(),
+          'records': pending.map(_pushRecord).toList(),
         },
       );
       session = await _accountStore.readSession() ?? session;
@@ -159,41 +163,59 @@ class SyncService {
           'Recall backup returned an invalid sync response.',
         );
       }
-      var processed = 0;
+      final acknowledgements = <String, Map<String, Object?>>{};
       for (final rawAccepted in accepted) {
         if (rawAccepted is! Map) {
-          continue;
+          throw const SyncException(
+            'Recall backup returned an invalid acknowledgement.',
+          );
         }
         final acceptedRecord = Map<String, Object?>.from(rawAccepted);
         final id = acceptedRecord['clientRecordId'];
         final serverRevision = acceptedRecord['serverRevision'];
         final conflict = acceptedRecord['conflict'];
-        if (id is! String || serverRevision is! int || conflict is! bool) {
-          continue;
+        if (id is! String ||
+            serverRevision is! int ||
+            serverRevision < 1 ||
+            conflict is! bool ||
+            !pending.any((record) => record.id == id) ||
+            acknowledgements.containsKey(id)) {
+          throw const SyncException(
+            'Recall backup returned an invalid acknowledgement.',
+          );
         }
-        processed++;
-        await (_database.update(
-          _database.syncRecords,
-        )..where((record) => record.id.equals(id))).write(
-          SyncRecordsCompanion(
-            serverRevision: Value(serverRevision),
-            hasLocalChanges: const Value(false),
-            hasConflict: const Value(false),
-            conflictOfRecordId: const Value(null),
-            updatedAt: Value(DateTime.now().toUtc()),
-          ),
-        );
-        if (conflict) {
-          conflicts++;
-        } else {
-          pushed++;
-        }
+        acknowledgements[id] = acceptedRecord;
       }
-      if (processed != pending.length) {
+      if (acknowledgements.length != pending.length) {
         throw const SyncException(
           'Recall backup did not acknowledge every encrypted change.',
         );
       }
+      await _database.transaction(() async {
+        for (final sent in pending) {
+          final acknowledgement = acknowledgements[sent.id]!;
+          final serverRevision = acknowledgement['serverRevision'] as int;
+          final conflict = acknowledgement['conflict'] as bool;
+          await (_database.update(_database.syncRecords)..where(
+                (record) =>
+                    record.id.equals(sent.id) &
+                    record.clientRevision.equals(sent.clientRevision),
+              ))
+              .write(
+                SyncRecordsCompanion(
+                  serverRevision: Value(serverRevision),
+                  hasLocalChanges: const Value(false),
+                  hasConflict: const Value(false),
+                  conflictOfRecordId: const Value(null),
+                ),
+              );
+          if (conflict) {
+            conflicts++;
+          } else {
+            pushed++;
+          }
+        }
+      });
     }
 
     var pulled = 0;
@@ -216,25 +238,37 @@ class SyncService {
           'Recall backup returned an invalid sync response.',
         );
       }
-      for (final rawRecord in records) {
-        if (rawRecord is! Map) {
-          continue;
-        }
-        final applied = await _applyRemoteRecord(
-          session,
-          Map<String, Object?>.from(rawRecord),
-        );
-        if (applied) {
-          pulled++;
-        }
-      }
       final nextCursor = responseCursor['lastServerRevision'];
       final hasMore = responseCursor['hasMore'];
-      if (nextCursor is! int || hasMore is! bool) {
+      if (nextCursor is! int ||
+          hasMore is! bool ||
+          nextCursor < cursor ||
+          (hasMore && (records.isEmpty || nextCursor <= cursor))) {
         throw const SyncException(
           'Recall backup returned an invalid sync cursor.',
         );
       }
+      await _database.transaction(() async {
+        var previousRevision = cursor;
+        for (final rawRecord in records) {
+          if (rawRecord is! Map ||
+              rawRecord['serverRevision'] is! int ||
+              (rawRecord['serverRevision'] as int) <= previousRevision ||
+              (rawRecord['serverRevision'] as int) > nextCursor) {
+            throw const SyncException(
+              'Recall backup returned an invalid sync page.',
+            );
+          }
+          previousRevision = rawRecord['serverRevision'] as int;
+          if (await _applyRemoteRecord(
+            session,
+            Map<String, Object?>.from(rawRecord),
+          )) {
+            pulled++;
+          }
+        }
+        await _database.writePullRevision(nextCursor);
+      });
       cursor = nextCursor;
       if (!hasMore) {
         break;
@@ -249,9 +283,32 @@ class SyncService {
     );
   }
 
+  Map<String, Object?> _pushRecord(SyncRecord record) => {
+    'id': record.id,
+    'type': record.recordType,
+    'encryptedPayload': record.encryptedPayload,
+    'payloadVersion': record.payloadVersion,
+    'clientRevision': record.clientRevision,
+    if (record.serverRevision != null)
+      'baseServerRevision': record.serverRevision,
+    if (record.deletedAt != null)
+      'deletedAt': record.deletedAt!.toUtc().toIso8601String(),
+  };
+
+  Future<void> permanentlyDeleteNote(String noteId) =>
+      _executionLock.synchronized(
+        () => _database.transaction(() async {
+          await queueDeletion(noteId);
+          await (_database.delete(
+            _database.notes,
+          )..where((note) => note.id.equals(noteId))).go();
+        }),
+      );
+
   Future<void> queueDeletion(String noteId) async {
     final session = await _accountStore.readSession();
     if (session == null) {
+      await _database.recordPendingDeletion(noteId);
       return;
     }
     final existing =
@@ -281,91 +338,149 @@ class SyncService {
             updatedAt: now,
           ),
         );
+    await _database.clearPendingDeletion(noteId);
   }
 
   Future<void> _queueChangedNotes(StoredSession session) async {
-    final notes = await (_database.select(
-      _database.notes,
-    )..orderBy([(note) => OrderingTerm(expression: note.updatedAt)])).get();
-    for (final note in notes) {
-      final existing =
-          await (_database.select(_database.syncRecords)
-                ..where((record) => record.id.equals(note.id))
-                ..limit(1))
-              .getSingleOrNull();
-      final reminders =
-          await (_database.select(_database.reminders)
-                ..where((reminder) => reminder.noteId.equals(note.id))
-                ..orderBy([
-                  (reminder) => OrderingTerm(expression: reminder.createdAt),
-                ])
-                ..limit(1))
-              .get();
-      final payloadVersion = _notePayloadVersion(reminders.firstOrNull);
-      if (existing != null &&
-          !note.updatedAt.isAfter(existing.updatedAt) &&
-          existing.payloadVersion >= payloadVersion) {
-        continue;
+    await _database.transaction(() async {
+      final notes = await (_database.select(
+        _database.notes,
+      )..orderBy([(note) => OrderingTerm(expression: note.updatedAt)])).get();
+      for (final note in notes) {
+        final existing =
+            await (_database.select(_database.syncRecords)
+                  ..where((record) => record.id.equals(note.id))
+                  ..limit(1))
+                .getSingleOrNull();
+        final reminders =
+            await (_database.select(_database.reminders)
+                  ..where((reminder) => reminder.noteId.equals(note.id))
+                  ..orderBy([
+                    (reminder) => OrderingTerm(expression: reminder.createdAt),
+                  ])
+                  ..limit(1))
+                .get();
+        final payloadVersion = _notePayloadVersion(reminders.firstOrNull);
+        final payload = await _notePayload(note);
+        if (existing != null &&
+            existing.recordType == 'note' &&
+            existing.payloadVersion >= payloadVersion &&
+            _sameJson(
+              payload,
+              await _cipher.decryptJson(
+                encryptedValue: existing.encryptedPayload,
+                masterKey: session.masterKey,
+              ),
+            )) {
+          continue;
+        }
+        final now = DateTime.now().toUtc();
+        final encryptedPayload = await _cipher.encryptJson(
+          value: payload,
+          masterKey: session.masterKey,
+        );
+        if (encryptedPayload.length > _maxEncryptedPayloadLength) {
+          throw const SyncException(
+            'A note is too large to sync. Shorten it or split it into smaller notes.',
+          );
+        }
+        await _database
+            .into(_database.syncRecords)
+            .insertOnConflictUpdate(
+              SyncRecordsCompanion.insert(
+                id: note.id,
+                recordType: 'note',
+                encryptedPayload: encryptedPayload,
+                payloadVersion: Value(payloadVersion),
+                clientRevision: (existing?.clientRevision ?? 0) + 1,
+                serverRevision: Value(existing?.serverRevision),
+                hasLocalChanges: const Value(true),
+                hasConflict: const Value(false),
+                deletedAt: const Value(null),
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
       }
+    });
+  }
 
-      final checklistItems =
-          await (_database.select(_database.checklistItems)
-                ..where((item) => item.noteId.equals(note.id))
-                ..orderBy([(item) => OrderingTerm(expression: item.sortOrder)]))
-              .get();
-      final now = DateTime.now().toUtc();
-      final encryptedPayload = await _cipher.encryptJson(
-        value: {
-          'schema': 1,
-          'note': {
-            'id': note.id,
-            'title': note.title,
-            'body': note.body,
-            'noteType': note.noteType,
-            'mood': note.mood,
-            'moodIsAutomatic': note.moodIsAutomatic,
-            'moodConfidence': note.moodConfidence,
-            'moodModelVersion': note.moodModelVersion,
-            'isPinned': note.isPinned,
-            'isArchived': note.isArchived,
-            'sortOrder': note.sortOrder,
-            'trashedAt': note.trashedAt?.toUtc().toIso8601String(),
-            'createdAt': note.createdAt.toUtc().toIso8601String(),
-            'updatedAt': note.updatedAt.toUtc().toIso8601String(),
-          },
-          'checklistItems': checklistItems
-              .map(
-                (item) => {
-                  'id': item.id,
-                  'content': item.content,
-                  'isDone': item.isDone,
-                  'sortOrder': item.sortOrder,
-                  'createdAt': item.createdAt.toUtc().toIso8601String(),
-                  'updatedAt': item.updatedAt.toUtc().toIso8601String(),
-                },
-              )
-              .toList(),
-          if (reminders.isNotEmpty) 'reminder': _reminderJson(reminders.single),
-        },
-        masterKey: session.masterKey,
-      );
-      await _database
-          .into(_database.syncRecords)
-          .insertOnConflictUpdate(
-            SyncRecordsCompanion.insert(
-              id: note.id,
-              recordType: 'note',
-              encryptedPayload: encryptedPayload,
-              payloadVersion: Value(payloadVersion),
-              clientRevision: (existing?.clientRevision ?? 0) + 1,
-              serverRevision: Value(existing?.serverRevision),
-              hasLocalChanges: const Value(true),
-              hasConflict: const Value(false),
-              createdAt: existing?.createdAt ?? now,
-              updatedAt: now,
-            ),
+  Future<Map<String, Object?>> _notePayload(Note note) async {
+    final checklistItems =
+        await (_database.select(_database.checklistItems)
+              ..where((item) => item.noteId.equals(note.id))
+              ..orderBy([(item) => OrderingTerm(expression: item.sortOrder)]))
+            .get();
+    final reminders =
+        await (_database.select(_database.reminders)
+              ..where((reminder) => reminder.noteId.equals(note.id))
+              ..orderBy([
+                (reminder) => OrderingTerm(expression: reminder.createdAt),
+              ])
+              ..limit(1))
+            .get();
+    return {
+      'schema': 1,
+      'note': {
+        'id': note.id,
+        'title': note.title,
+        'body': note.body,
+        'noteType': note.noteType,
+        'mood': note.mood,
+        'moodIsAutomatic': note.moodIsAutomatic,
+        'moodConfidence': note.moodConfidence,
+        'moodModelVersion': note.moodModelVersion,
+        'isPinned': note.isPinned,
+        'isArchived': note.isArchived,
+        'sortOrder': note.sortOrder,
+        'trashedAt': note.trashedAt?.toUtc().toIso8601String(),
+        'createdAt': note.createdAt.toUtc().toIso8601String(),
+        'updatedAt': note.updatedAt.toUtc().toIso8601String(),
+      },
+      'checklistItems': checklistItems
+          .map(
+            (item) => {
+              'id': item.id,
+              'content': item.content,
+              'isDone': item.isDone,
+              'sortOrder': item.sortOrder,
+              'createdAt': item.createdAt.toUtc().toIso8601String(),
+              'updatedAt': item.updatedAt.toUtc().toIso8601String(),
+            },
+          )
+          .toList(),
+      if (reminders.isNotEmpty) 'reminder': _reminderJson(reminders.single),
+    };
+  }
+
+  Future<bool> _noteHasChanged(
+    Note note,
+    SyncRecord? record,
+    StoredSession session,
+  ) async {
+    if (record == null || record.recordType != 'note') return true;
+    final stored = await _cipher.decryptJson(
+      encryptedValue: record.encryptedPayload,
+      masterKey: session.masterKey,
+    );
+    return !_sameJson(await _notePayload(note), stored);
+  }
+
+  bool _sameJson(Object? left, Object? right) {
+    if (left is Map && right is Map) {
+      return left.length == right.length &&
+          left.keys.every(
+            (key) => right.containsKey(key) && _sameJson(left[key], right[key]),
           );
     }
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (var index = 0; index < left.length; index++) {
+        if (!_sameJson(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    return left == right;
   }
 
   Map<String, Object?> _reminderJson(Reminder reminder) {
@@ -460,21 +575,19 @@ class SyncService {
       throw const SyncException('Encrypted note record is invalid.');
     }
 
-    final isConflictCopy = conflictOfRecordId is String;
-    if (isConflictCopy) {
-      if (type != 'tombstone' && payload['deleted'] != true) {
-        await _writeRemoteNote(payload, idOverride: id, conflictCopy: true);
-      }
-      await _storeRemoteRecord(
-        id: id,
-        type: type,
-        encryptedPayload: encryptedPayload,
-        payloadVersion: payloadVersion,
-        serverRevision: serverRevision,
-        conflictOfRecordId: conflictOfRecordId,
-        deletedAt: _dateOrNull(record['deletedAt']),
+    final rawNote = payload['note'];
+    final payloadId = type == 'tombstone'
+        ? payload['id']
+        : rawNote is Map
+        ? rawNote['id']
+        : null;
+    if (payloadId != id && payloadId != conflictOfRecordId ||
+        payloadId is! String ||
+        !_uuidPattern.hasMatch(payloadId) ||
+        (type == 'tombstone') != (payload['deleted'] == true)) {
+      throw const SyncException(
+        'Encrypted record identity or type does not match.',
       );
-      return true;
     }
 
     final localRecord =
@@ -482,7 +595,23 @@ class SyncService {
               ..where((entry) => entry.id.equals(id))
               ..limit(1))
             .getSingleOrNull();
-    if (localRecord != null && localRecord.hasLocalChanges) {
+    if (localRecord?.serverRevision case final revision?
+        when revision >= serverRevision) {
+      return false;
+    }
+    final localNote = await (_database.select(
+      _database.notes,
+    )..where((note) => note.id.equals(id))).getSingleOrNull();
+    if (payloadId != id &&
+        (localNote != null || localRecord != null) &&
+        localRecord?.conflictOfRecordId != payloadId) {
+      throw const SyncException(
+        'A conflict record cannot replace another note.',
+      );
+    }
+    if ((localRecord?.hasLocalChanges ?? false) ||
+        (localNote != null &&
+            await _noteHasChanged(localNote, localRecord, session))) {
       if (type != 'tombstone' && payload['deleted'] != true) {
         await _writeRemoteNote(
           payload,
@@ -493,12 +622,17 @@ class SyncService {
       return false;
     }
 
-    if (type == 'tombstone' || payload['deleted'] == true) {
+    final isConflictCopy = conflictOfRecordId is String && payloadId != id;
+    if (type == 'tombstone') {
       await (_database.delete(
         _database.notes,
       )..where((note) => note.id.equals(id))).go();
     } else {
-      await _writeRemoteNote(payload);
+      await _writeRemoteNote(
+        payload,
+        idOverride: id,
+        conflictCopy: isConflictCopy,
+      );
     }
     await _storeRemoteRecord(
       id: id,
@@ -506,6 +640,7 @@ class SyncService {
       encryptedPayload: encryptedPayload,
       payloadVersion: payloadVersion,
       serverRevision: serverRevision,
+      conflictOfRecordId: conflictOfRecordId as String?,
       deletedAt: _dateOrNull(record['deletedAt']),
       existing: localRecord,
     );
@@ -590,9 +725,10 @@ class SyncService {
         }.contains(mood)) {
       throw const SyncException('Encrypted note record is invalid.');
     }
+    final originalTitle = _requiredString(note, 'title', maxLength: 2000);
     final title = conflictCopy
-        ? 'Conflict: ${_requiredString(note, 'title', maxLength: 2000)}'
-        : _requiredString(note, 'title', maxLength: 2000);
+        ? 'Conflict: ${originalTitle.substring(0, originalTitle.length.clamp(0, 1990))}'
+        : originalTitle;
     final body = _requiredString(note, 'body', maxLength: 500000);
     await _database.transaction(() async {
       final existing =
@@ -618,7 +754,15 @@ class SyncService {
         isArchived: Value(
           conflictCopy ? false : _requiredBool(note, 'isArchived'),
         ),
-        sortOrder: Value(_optionalInt(note, 'sortOrder', fallback: 0)),
+        sortOrder: Value(
+          _optionalInt(
+            note,
+            'sortOrder',
+            fallback: 0,
+            minimum: -2147483648,
+            maximum: 2147483647,
+          ),
+        ),
         trashedAt: Value(conflictCopy ? null : _dateOrNull(note['trashedAt'])),
         updatedAt: Value(_requiredDate(note, 'updatedAt')),
       );
@@ -645,7 +789,15 @@ class SyncService {
                 isArchived: Value(
                   conflictCopy ? false : _requiredBool(note, 'isArchived'),
                 ),
-                sortOrder: Value(_optionalInt(note, 'sortOrder', fallback: 0)),
+                sortOrder: Value(
+                  _optionalInt(
+                    note,
+                    'sortOrder',
+                    fallback: 0,
+                    minimum: -2147483648,
+                    maximum: 2147483647,
+                  ),
+                ),
                 trashedAt: Value(
                   conflictCopy ? null : _dateOrNull(note['trashedAt']),
                 ),
@@ -734,17 +886,6 @@ class SyncService {
     });
   }
 
-  Future<int> _latestServerRevision() async {
-    final records = await _database.select(_database.syncRecords).get();
-    return records.fold<int>(
-      0,
-      (latest, record) =>
-          record.serverRevision != null && record.serverRevision! > latest
-          ? record.serverRevision!
-          : latest,
-    );
-  }
-
   Future<Map<String, Object?>> _requestJson({
     required StoredSession session,
     required String method,
@@ -754,7 +895,9 @@ class SyncService {
     String failureMessage = 'Could not sync with Recall backup.',
   }) async {
     final uri = Uri.parse(session.account.serverUrl).resolve(path);
-    final request = await _httpClient.openUrl(method, uri);
+    final request = await _httpClient
+        .openUrl(method, uri)
+        .timeout(const Duration(seconds: 15));
     request.followRedirects = false;
     request.headers.contentType = ContentType.json;
     request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -763,7 +906,13 @@ class SyncService {
       'Bearer ${session.accessToken}',
     );
     request.write(jsonEncode(body));
-    final response = await request.close();
+    final response = await request.close().timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        request.abort();
+        throw TimeoutException('Recall backup timed out.');
+      },
+    );
     final content = await _readResponse(response);
     final decoded = content.isEmpty ? null : jsonDecode(content);
     if (response.statusCode == HttpStatus.unauthorized && !retried) {
@@ -793,11 +942,19 @@ class SyncService {
 
   Future<StoredSession> _refreshSession(StoredSession session) async {
     final uri = Uri.parse(session.account.serverUrl).resolve('/auth/refresh');
-    final request = await _httpClient.postUrl(uri);
+    final request = await _httpClient
+        .postUrl(uri)
+        .timeout(const Duration(seconds: 15));
     request.followRedirects = false;
     request.headers.contentType = ContentType.json;
     request.write(jsonEncode({'refreshToken': session.refreshToken}));
-    final response = await request.close();
+    final response = await request.close().timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        request.abort();
+        throw TimeoutException('Recall backup timed out.');
+      },
+    );
     final content = await _readResponse(response);
     if (response.statusCode != HttpStatus.ok) {
       // A foreground and background isolate can discover an expired access
@@ -877,7 +1034,7 @@ class SyncService {
     }
     final bytes = BytesBuilder(copy: false);
     var length = 0;
-    await for (final chunk in response) {
+    await for (final chunk in response.timeout(const Duration(seconds: 30))) {
       length += chunk.length;
       if (length > _maxResponseBytes) {
         throw const SyncException('Recall backup response was too large.');
@@ -942,10 +1099,12 @@ class SyncService {
     Map<String, Object?> value,
     String key, {
     required int fallback,
+    int minimum = 0,
+    int maximum = 1000000,
   }) {
     final item = value[key];
     if (item == null) return fallback;
-    if (item is! int || item < 0 || item > 1000000) {
+    if (item is! int || item < minimum || item > maximum) {
       throw const SyncException('Encrypted note record is invalid.');
     }
     return item;

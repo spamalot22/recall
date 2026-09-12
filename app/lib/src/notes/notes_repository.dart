@@ -267,7 +267,10 @@ class NotesRepository {
                 ..where((note) => note.id.equals(id))
                 ..limit(1))
               .getSingleOrNull();
-      final sortOrder = existing != null && existing.isPinned != pinned
+      if (existing == null || existing.trashedAt != null) {
+        throw StateError('This note has been deleted or moved to trash.');
+      }
+      final sortOrder = existing.isPinned != pinned
           ? Value(await _leadingSortOrder(pinned))
           : const Value<int>.absent();
       await (_db.update(_db.notes)..where((note) => note.id.equals(id))).write(

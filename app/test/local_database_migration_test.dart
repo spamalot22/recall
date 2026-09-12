@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/data/local_database.dart';
 
 void main() {
-  test('schema 4 migration preserves schema 2 notes', () async {
+  test('schema 5 migration preserves schema 2 notes', () async {
     final directory = Directory.systemTemp.createTempSync(
       'recall-migration-test-',
     );
@@ -36,6 +36,8 @@ void main() {
       await schemaTwo.customStatement(
         'ALTER TABLE notes DROP COLUMN sort_order',
       );
+      await schemaTwo.customStatement('DROP TABLE sync_state');
+      await schemaTwo.customStatement('DROP TABLE sync_deletions');
       await schemaTwo.customStatement('PRAGMA user_version = 2');
       await schemaTwo.close();
 
@@ -51,12 +53,63 @@ void main() {
         final version = await upgraded
             .customSelect('PRAGMA user_version')
             .getSingle();
-        expect(version.read<int>('user_version'), 4);
+        expect(version.read<int>('user_version'), 5);
+        expect(await upgraded.readPullRevision(), 0);
       } finally {
         await upgraded.close();
       }
     } finally {
       directory.deleteSync(recursive: true);
     }
+  });
+
+  test('permanent deletion cascades to checklist and reminder data', () async {
+    final db = LocalDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final now = DateTime.utc(2026, 9, 5);
+    await db
+        .into(db.notes)
+        .insert(
+          NotesCompanion.insert(id: 'note', createdAt: now, updatedAt: now),
+        );
+    await db
+        .into(db.checklistItems)
+        .insert(
+          ChecklistItemsCompanion.insert(
+            id: 'item',
+            noteId: 'note',
+            content: 'Private content',
+            sortOrder: 0,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await db
+        .into(db.reminders)
+        .insert(
+          RemindersCompanion.insert(
+            id: 'reminder',
+            noteId: 'note',
+            nextFireAt: now,
+            timezone: 'UTC',
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+    await db
+        .into(db.reminderOccurrences)
+        .insert(
+          ReminderOccurrencesCompanion.insert(
+            id: 'occurrence',
+            reminderId: 'reminder',
+            scheduledFor: now,
+            status: 'done',
+            createdAt: now,
+          ),
+        );
+    await db.delete(db.notes).go();
+    expect(await db.select(db.checklistItems).get(), isEmpty);
+    expect(await db.select(db.reminders).get(), isEmpty);
+    expect(await db.select(db.reminderOccurrences).get(), isEmpty);
   });
 }

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../sync/sync_execution_lock.dart';
+
 class StoredAccount {
   const StoredAccount({
     required this.serverUrl,
@@ -48,10 +50,48 @@ class SecureAccountStore {
   static const _masterKeyKey = 'crypto.master_key';
   static const _databaseKeyKey = 'crypto.database_key';
   static const _profileUserIdKey = 'profile.user_id';
+  static const _sessionKey = 'session.v2';
 
   final FlutterSecureStorage _storage;
 
   Future<StoredSession?> readSession() async {
+    final encoded = await _storage.read(key: _sessionKey);
+    if (encoded != null) {
+      try {
+        final data = jsonDecode(encoded);
+        if (data is! Map<String, dynamic>) return null;
+        final fields = [
+          'serverUrl',
+          'userId',
+          'email',
+          'deviceId',
+          'accessToken',
+          'refreshToken',
+          'masterKey',
+        ];
+        if (fields.any(
+          (key) => data[key] is! String || (data[key] as String).isEmpty,
+        )) {
+          return null;
+        }
+        final key = base64Url.decode(data['masterKey'] as String);
+        if (key.length != 32) return null;
+        return StoredSession(
+          account: StoredAccount(
+            serverUrl: data['serverUrl'] as String,
+            userId: data['userId'] as String,
+            email: data['email'] as String,
+            deviceId: data['deviceId'] as String,
+          ),
+          accessToken: data['accessToken'] as String,
+          refreshToken: data['refreshToken'] as String,
+          masterKey: SecretKeyData(key),
+        );
+      } on FormatException {
+        return null;
+      }
+    }
+    // Older installations are read without rewriting credentials during a read.
     final values = await Future.wait([
       _storage.read(key: _serverUrlKey),
       _storage.read(key: _userIdKey),
@@ -98,19 +138,24 @@ class SecureAccountStore {
     }
     await assertProfileCompatible(session.account.userId);
 
-    await Future.wait([
-      _storage.write(key: _serverUrlKey, value: session.account.serverUrl),
-      _storage.write(key: _userIdKey, value: session.account.userId),
-      _storage.write(key: _emailKey, value: session.account.email),
-      _storage.write(key: _deviceIdKey, value: session.account.deviceId),
-      _storage.write(key: _accessTokenKey, value: session.accessToken),
-      _storage.write(key: _refreshTokenKey, value: session.refreshToken),
-      _storage.write(
-        key: _masterKeyKey,
-        value: base64UrlEncode(session.masterKey.bytes),
-      ),
-      _storage.write(key: _profileUserIdKey, value: session.account.userId),
-    ]);
+    await _storage.write(key: _profileUserIdKey, value: session.account.userId);
+    await _storage.write(
+      key: _sessionKey,
+      value: jsonEncode({
+        'serverUrl': session.account.serverUrl,
+        'userId': session.account.userId,
+        'email': session.account.email,
+        'deviceId': session.account.deviceId,
+        'accessToken': session.accessToken,
+        'refreshToken': session.refreshToken,
+        'masterKey': base64UrlEncode(session.masterKey.bytes),
+      }),
+    );
+    try {
+      await _clearLegacySession();
+    } on Object {
+      // The complete new session is already committed in secure storage.
+    }
   }
 
   Future<void> assertProfileCompatible(String userId) async {
@@ -120,7 +165,11 @@ class SecureAccountStore {
     }
   }
 
-  Future<String> readOrCreateDatabaseKey() async {
+  Future<String> readOrCreateDatabaseKey() => const FileSyncExecutionLock(
+    name: 'recall-database-key',
+  ).synchronized(_readOrCreateDatabaseKey);
+
+  Future<String> _readOrCreateDatabaseKey() async {
     final existing = await _storage.read(key: _databaseKeyKey);
     if (existing != null && existing.isNotEmpty) {
       return existing;
@@ -134,6 +183,13 @@ class SecureAccountStore {
   }
 
   Future<void> clearSession() async {
+    // Keep a signed-out marker so interrupted legacy cleanup cannot resurrect
+    // old credentials on the next launch.
+    await _storage.write(key: _sessionKey, value: 'null');
+    await _clearLegacySession();
+  }
+
+  Future<void> _clearLegacySession() async {
     await Future.wait([
       _storage.delete(key: _serverUrlKey),
       _storage.delete(key: _userIdKey),

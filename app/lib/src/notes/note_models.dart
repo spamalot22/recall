@@ -638,9 +638,15 @@ ColorMood automaticMoodForNote({
   if (reminder?.repeats ?? false) {
     scores[ColorMood.routine] = scores[ColorMood.routine]! + 4;
   }
-  final reminderAt = reminder?.snoozeUntil ?? reminder?.nextFireAt;
+  final currentTime = now ?? DateTime.now();
+  final snoozeUntil = reminder?.snoozeUntil;
+  final reminderAt = snoozeUntil != null && snoozeUntil.isAfter(currentTime)
+      ? snoozeUntil
+      : reminder?.repeats == true
+      ? reminder!.nextOccurrenceAfter(currentTime)
+      : reminder?.nextFireAt;
   if (reminderAt != null) {
-    final until = reminderAt.difference(now ?? DateTime.now());
+    final until = reminderAt.difference(currentTime);
     imminentReminder = until <= const Duration(hours: 6);
     final urgency = until.isNegative
         ? 7.0

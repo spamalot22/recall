@@ -303,6 +303,62 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   });
 
+  testWidgets(
+    'editing an elapsed reminder saves text and preserves its snooze',
+    (tester) async {
+      final database = LocalDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+      final repository = NotesRepository(
+        database,
+        moodAnalyzer: _ClearMoodAnalyzer(),
+      );
+      final scheduler = _NoopReminderScheduler();
+      final snooze = DateTime.now().add(const Duration(hours: 1));
+      final noteId = await repository.createTextNote(
+        title: 'Elapsed reminder',
+        body: 'Old text',
+        reminder: NoteReminder(
+          nextFireAt: DateTime.now().subtract(const Duration(hours: 1)),
+          recurrence: ReminderRecurrence.none,
+          snoozeUntil: snooze,
+        ),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localDatabaseProvider.overrideWithValue(database),
+            moodAnalyzerProvider.overrideWithValue(_ClearMoodAnalyzer()),
+            reminderSchedulerProvider.overrideWithValue(scheduler),
+            syncServiceProvider.overrideWithValue(_NoopSyncService(database)),
+            storedSessionProvider.overrideWith((ref) async => null),
+            backgroundStartupEnabledProvider.overrideWithValue(false),
+          ],
+          child: const RecallApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Elapsed reminder'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('note-body-field')),
+        'Edited text',
+      );
+      await tester.tap(find.byType(CloseButton));
+      await tester.pumpAndSettle();
+      final saved = await repository.loadNoteForEditing(noteId);
+      expect(saved?.body, 'Edited text');
+      expect(
+        saved?.reminder?.snoozeUntil?.millisecondsSinceEpoch,
+        (snooze.millisecondsSinceEpoch ~/ 1000) * 1000,
+      );
+      expect(scheduler.snoozes, hasLength(1));
+      expect(find.byKey(const Key('note-body-field')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 1));
+    },
+  );
+
   testWidgets('titleless notes lead with their content', (tester) async {
     const titleless = NotePreview(
       id: 'titleless',
@@ -2073,6 +2129,15 @@ class _UnexpectedEmotionClassifier implements ContextualEmotionClassifier {
 
 class _NoopReminderScheduler extends ReminderScheduler {
   final _openRequests = StreamController<String>.broadcast();
+  final snoozes = <ScheduledNoteReminder>[];
+
+  @override
+  Future<void> scheduleSnooze(
+    ScheduledNoteReminder schedule, {
+    bool requestPermissions = true,
+  }) async {
+    snoozes.add(schedule);
+  }
 
   @override
   Stream<String> get openNoteRequests => _openRequests.stream;
@@ -2116,9 +2181,18 @@ class _FailingCancellationReminderScheduler extends _NoopReminderScheduler {
 
 class _NoopSyncService extends SyncService {
   _NoopSyncService(LocalDatabase database, {this.pendingCount = 0})
-    : super(database, SecureAccountStore());
+    : _database = database,
+      super(database, SecureAccountStore());
 
   final int pendingCount;
+  final LocalDatabase _database;
+
+  @override
+  Future<void> permanentlyDeleteNote(String noteId) async {
+    await (_database.delete(
+      _database.notes,
+    )..where((note) => note.id.equals(noteId))).go();
+  }
 
   @override
   Future<SyncResult> sync() async => const SyncResult(connected: false);

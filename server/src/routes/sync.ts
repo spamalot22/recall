@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, lte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -8,7 +8,7 @@ import { auditEvents, encryptedRecords, syncCursors } from "../db/schema.js";
 const encryptedRecordSchema = z.object({
   id: z.string().uuid(),
   type: z.enum(["note", "checklist_item", "reminder", "reminder_occurrence", "tombstone"]),
-  encryptedPayload: z.string().min(1).max(700_000),
+  encryptedPayload: z.string().min(1).max(700_000).regex(/^[A-Za-z0-9_-]+={0,2}$/),
   payloadVersion: z.number().int().positive().default(1),
   clientRevision: z.number().int().nonnegative(),
   baseServerRevision: z.number().int().nonnegative().optional(),
@@ -93,6 +93,20 @@ export async function syncRoutes(app: FastifyInstance) {
           continue;
         }
 
+        if (existing.sourceDeviceId === request.user.deviceId &&
+            existing.clientRevision === record.clientRevision &&
+            existing.encryptedPayload === record.encryptedPayload &&
+            existing.type === record.type && existing.payloadVersion === record.payloadVersion &&
+            existing.deletedAt?.getTime() === deletedAt?.getTime()) {
+          acceptedRecords.push({
+            clientRecordId: record.id,
+            serverRecordId: existing.id,
+            serverRevision: existing.serverRevision,
+            conflict: false
+          });
+          continue;
+        }
+
         if (record.baseServerRevision === existing.serverRevision) {
           const serverRevision = nextServerRevision++;
           const [updated] = await tx
@@ -105,6 +119,7 @@ export async function syncRoutes(app: FastifyInstance) {
               serverRevision,
               sourceDeviceId: request.user.deviceId,
               deletedAt,
+              conflictOfRecordId: null,
               updatedAt: new Date()
             })
             .where(and(eq(encryptedRecords.id, record.id), eq(encryptedRecords.userId, userId)))
@@ -132,7 +147,7 @@ export async function syncRoutes(app: FastifyInstance) {
             clientRevision: existing.clientRevision,
             serverRevision: conflictServerRevision,
             sourceDeviceId: existing.sourceDeviceId,
-            conflictOfRecordId: existing.id,
+            conflictOfRecordId: existing.conflictOfRecordId ?? existing.id,
             deletedAt: existing.deletedAt
           })
           .returning();
@@ -148,6 +163,7 @@ export async function syncRoutes(app: FastifyInstance) {
             serverRevision,
             sourceDeviceId: request.user.deviceId,
             deletedAt,
+            conflictOfRecordId: null,
             updatedAt: new Date()
           })
           .where(and(eq(encryptedRecords.id, record.id), eq(encryptedRecords.userId, userId)))
@@ -182,7 +198,8 @@ export async function syncRoutes(app: FastifyInstance) {
     const input = pullSchema.parse(request.body);
     const userId = request.user.userId;
 
-    const records = await app.db
+    // Bound bytes as well as record count to match the app's 1 MiB limit.
+    const page = app.db.$with("pull_page").as(app.db
       .select({
         id: encryptedRecords.id,
         type: encryptedRecords.type,
@@ -191,33 +208,35 @@ export async function syncRoutes(app: FastifyInstance) {
         clientRevision: encryptedRecords.clientRevision,
         serverRevision: encryptedRecords.serverRevision,
         conflictOfRecordId: encryptedRecords.conflictOfRecordId,
-        deletedAt: encryptedRecords.deletedAt
+        deletedAt: encryptedRecords.deletedAt,
+        pageBytes: sql<number>`sum(octet_length(${encryptedRecords.encryptedPayload}) + 1024)
+          over (order by ${encryptedRecords.serverRevision})`.as("page_bytes")
       })
       .from(encryptedRecords)
       .where(and(eq(encryptedRecords.userId, userId), gt(encryptedRecords.serverRevision, input.afterServerRevision)))
       .orderBy(encryptedRecords.serverRevision)
-      .limit(input.limit);
+      .limit(input.limit));
+    const records = await app.db.with(page).select({
+      id: page.id,
+      type: page.type,
+      encryptedPayload: page.encryptedPayload,
+      payloadVersion: page.payloadVersion,
+      clientRevision: page.clientRevision,
+      serverRevision: page.serverRevision,
+      conflictOfRecordId: page.conflictOfRecordId,
+      deletedAt: page.deletedAt
+    }).from(page).where(lte(page.pageBytes, 900_000)).orderBy(page.serverRevision);
 
     const lastServerRevision = records.at(-1)?.serverRevision ?? input.afterServerRevision;
 
-    const [existingCursor] = await app.db
-      .select({ id: syncCursors.id })
-      .from(syncCursors)
-      .where(eq(syncCursors.deviceId, request.user.deviceId))
-      .limit(1);
-
-    if (existingCursor) {
-      await app.db
-        .update(syncCursors)
-        .set({ lastServerRevision, updatedAt: new Date() })
-        .where(eq(syncCursors.id, existingCursor.id));
-    } else {
-      await app.db.insert(syncCursors).values({
+    await app.db.insert(syncCursors).values({
         userId,
         deviceId: request.user.deviceId,
         lastServerRevision
+      }).onConflictDoUpdate({
+        target: syncCursors.deviceId,
+        set: { lastServerRevision, updatedAt: new Date() }
       });
-    }
 
     await app.db.insert(auditEvents).values({
       action: "sync_pull",
@@ -232,7 +251,7 @@ export async function syncRoutes(app: FastifyInstance) {
       records,
       cursor: {
         lastServerRevision,
-        hasMore: records.length === input.limit
+        hasMore: records.length > 0
       }
     };
   });

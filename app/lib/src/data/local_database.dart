@@ -105,11 +105,54 @@ class LocalDatabase extends _$LocalDatabase {
   LocalDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
+
+  Future<void> _createSyncState() async {
+    await customStatement('''
+    CREATE TABLE IF NOT EXISTS sync_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      pull_revision INTEGER NOT NULL DEFAULT 0
+    )
+    ''');
+    await customStatement(
+      'CREATE TABLE IF NOT EXISTS sync_deletions (note_id TEXT PRIMARY KEY)',
+    );
+  }
+
+  Future<void> recordPendingDeletion(String noteId) => customStatement(
+    'INSERT OR IGNORE INTO sync_deletions (note_id) VALUES (?)',
+    [noteId],
+  );
+
+  Future<List<String>> pendingDeletionIds() async => [
+    for (final row in await customSelect(
+      'SELECT note_id FROM sync_deletions',
+    ).get())
+      row.read<String>('note_id'),
+  ];
+
+  Future<void> clearPendingDeletion(String noteId) =>
+      customStatement('DELETE FROM sync_deletions WHERE note_id = ?', [noteId]);
+
+  Future<int> readPullRevision() async {
+    final row = await customSelect(
+      'SELECT pull_revision FROM sync_state WHERE id = 1',
+    ).getSingleOrNull();
+    return row?.read<int>('pull_revision') ?? 0;
+  }
+
+  Future<void> writePullRevision(int revision) => customStatement(
+    'INSERT INTO sync_state (id, pull_revision) VALUES (1, ?) '
+    'ON CONFLICT(id) DO UPDATE SET pull_revision = excluded.pull_revision',
+    [revision],
+  );
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (migrator) => migrator.createAll(),
+    onCreate: (migrator) async {
+      await migrator.createAll();
+      await _createSyncState();
+    },
     onUpgrade: (migrator, from, to) async {
       if (from < 2) {
         await migrator.addColumn(notes, notes.moodIsAutomatic);
@@ -121,7 +164,22 @@ class LocalDatabase extends _$LocalDatabase {
       if (from < 4) {
         await migrator.addColumn(notes, notes.sortOrder);
       }
+      if (from < 5) {
+        // Start at zero: old push acknowledgements were incorrectly used as
+        // pull progress, so an interrupted sync may have skipped records.
+        await _createSyncState();
+        await customStatement(
+          'DELETE FROM checklist_items WHERE note_id NOT IN (SELECT id FROM notes)',
+        );
+        await customStatement(
+          'DELETE FROM reminders WHERE note_id NOT IN (SELECT id FROM notes)',
+        );
+        await customStatement(
+          'DELETE FROM reminder_occurrences WHERE reminder_id NOT IN (SELECT id FROM reminders)',
+        );
+      }
     },
+    beforeOpen: (_) => customStatement('PRAGMA foreign_keys = ON'),
   );
 }
 

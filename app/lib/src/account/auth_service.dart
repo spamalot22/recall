@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 
 import '../network/lan_address.dart';
 import '../security/key_bundles.dart';
+import '../sync/sync_execution_lock.dart';
 import 'secure_account_store.dart';
 
 class AccountException implements Exception {
@@ -29,7 +30,9 @@ class AuthService {
     this._accountStore, {
     KeyBundleService? keyBundles,
     HttpClient? httpClient,
+    SyncExecutionLock? executionLock,
   }) : _keyBundles = keyBundles ?? KeyBundleService(),
+       _executionLock = executionLock ?? const FileSyncExecutionLock(),
        _httpClient =
            httpClient ??
            (HttpClient()..connectionTimeout = const Duration(seconds: 15));
@@ -39,6 +42,7 @@ class AuthService {
   final SecureAccountStore _accountStore;
   final KeyBundleService _keyBundles;
   final HttpClient _httpClient;
+  final SyncExecutionLock _executionLock;
 
   Future<AuthenticationResult> register({
     required String serverUrl,
@@ -228,17 +232,21 @@ class AuthService {
     return AuthenticationResult(session: session);
   }
 
-  Future<void> logout() async {
+  Future<void> logout() => _executionLock.synchronized(_logout);
+
+  Future<void> _logout() async {
     final session = await _accountStore.readSession();
     if (session != null) {
       try {
-        final request = await _httpClient.postUrl(
-          Uri.parse(session.account.serverUrl).resolve('/auth/logout'),
-        );
+        final request = await _httpClient
+            .postUrl(
+              Uri.parse(session.account.serverUrl).resolve('/auth/logout'),
+            )
+            .timeout(const Duration(seconds: 15));
         request.followRedirects = false;
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode({'refreshToken': session.refreshToken}));
-        final response = await request.close();
+        final response = await _closeRequest(request);
         await _readResponse(response);
       } on Object {
         // Local disconnect still succeeds when the self-hosted server is offline.
@@ -249,7 +257,9 @@ class AuthService {
 
   Future<void> _storeSession(StoredSession session) async {
     try {
-      await _accountStore.writeSession(session);
+      await _executionLock.synchronized(
+        () => _accountStore.writeSession(session),
+      );
     } on ProfileAccountMismatchException {
       throw const AccountException(
         'This local profile belongs to another account. Export or clear it before switching accounts.',
@@ -286,7 +296,9 @@ class AuthService {
   }) async {
     final base = Uri.parse(serverUrl);
     final uri = base.resolve(path);
-    final request = await _httpClient.openUrl(method, uri);
+    final request = await _httpClient
+        .openUrl(method, uri)
+        .timeout(const Duration(seconds: 15));
     request.followRedirects = false;
     request.headers.contentType = ContentType.json;
     request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -300,7 +312,7 @@ class AuthService {
       request.write(jsonEncode(body));
     }
 
-    final response = await request.close();
+    final response = await _closeRequest(request);
     final content = await _readResponse(response);
     Map<String, Object?>? decoded;
     if (content.isNotEmpty) {
@@ -382,7 +394,7 @@ class AuthService {
     }
     final bytes = BytesBuilder(copy: false);
     var length = 0;
-    await for (final chunk in response) {
+    await for (final chunk in response.timeout(const Duration(seconds: 30))) {
       length += chunk.length;
       if (length > _maxResponseBytes) {
         throw const AccountException('The server response was too large.');
@@ -391,6 +403,15 @@ class AuthService {
     }
     return utf8.decode(bytes.takeBytes());
   }
+
+  Future<HttpClientResponse> _closeRequest(HttpClientRequest request) =>
+      request.close().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          request.abort();
+          throw const AccountException('Recall backup timed out.');
+        },
+      );
 
   String _requiredString(Map<String, Object?> value, String key) {
     final field = value[key];

@@ -22,6 +22,41 @@ void main() {
     await database.close();
   });
 
+  for (final permanentlyDeleted in [false, true]) {
+    test(
+      'stale editor cannot modify a ${permanentlyDeleted ? 'deleted' : 'trashed'} note',
+      () async {
+        final id = await repository.createTextNote(
+          title: 'Original',
+          body: 'Preserve this',
+        );
+        if (permanentlyDeleted) {
+          await database.delete(database.notes).go();
+        } else {
+          await repository.moveNoteToTrash(id);
+        }
+        await expectLater(
+          repository.updateTextNote(
+            id: id,
+            title: 'Stale edit',
+            body: 'Should not be saved',
+            pinned: false,
+            checklistItems: const [ChecklistItemDraft(text: 'Orphan item')],
+          ),
+          throwsStateError,
+        );
+        expect(await database.select(database.checklistItems).get(), isEmpty);
+        final notes = await database.select(database.notes).get();
+        if (permanentlyDeleted) {
+          expect(notes, isEmpty);
+        } else {
+          expect(notes.single.body, 'Preserve this');
+          expect(notes.single.trashedAt, isNotNull);
+        }
+      },
+    );
+  }
+
   test('creates a persisted text note with an automatic mood', () async {
     await repository.createTextNote(
       title: 'Buy filters',
