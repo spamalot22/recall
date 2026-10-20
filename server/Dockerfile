@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS deps
+FROM node:25-bookworm-slim AS deps
 WORKDIR /app
 COPY .npmrc package*.json ./
 RUN npm ci
