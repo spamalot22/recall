@@ -16,8 +16,9 @@ class _ImmediateLock implements SyncExecutionLock {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final anchor = DateTime(2026, 10, 5, 22);
-  final restart = DateTime(2026, 11, 9, 22);
+  final year = DateTime.now().year + 1;
+  final anchor = DateTime(year, 10, 5, 22);
+  final restart = DateTime(year, 11, 9, 22);
   final reminder = NoteReminder(
     nextFireAt: anchor,
     recurrence: ReminderRecurrence.daily,
@@ -48,7 +49,7 @@ void main() {
   setUp(() {
     AndroidFlutterLocalNotificationsPlugin.registerWith();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    now = DateTime(2026, 10, 12, 23);
+    now = DateTime(year, 10, 12, 23);
     pending = {};
     cancelled = [];
     scheduled = [];
@@ -115,9 +116,9 @@ void main() {
         .toList();
     expect(times.first, restart.toUtc());
     expect(times.take(7), [
-      for (var i = 0; i < 7; i++) DateTime(2026, 11, 9 + i, 22).toUtc(),
+      for (var i = 0; i < 7; i++) DateTime(year, 11, 9 + i, 22).toUtc(),
     ]);
-    expect(times[7], DateTime(2026, 12, 14, 22).toUtc());
+    expect(times[7], DateTime(year, 12, 14, 22).toUtc());
   });
 
   test(
@@ -228,7 +229,7 @@ void main() {
       expect(pending[due.key], due.value);
       expect(
         scheduled.map((a) => ReminderAlarm.parse(a['payload'] as String)!.at),
-        contains(DateTime(2026, 11, 10, 22).toUtc()),
+        contains(DateTime(year, 11, 10, 22).toUtc()),
       );
     },
   );
@@ -334,7 +335,7 @@ void main() {
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = null;
-    now = DateTime(2026, 11, 9, 21);
+    now = DateTime(year, 11, 9, 21);
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
@@ -358,7 +359,7 @@ void main() {
     final preview = tester.widget<Text>(
       find.byKey(const Key('next-cycle-notification')),
     );
-    expect(preview.data, contains('November 9, 2026'));
+    expect(preview.data, contains('November 9, $year'));
     expect(preview.data, contains('10:00 PM'));
   });
 }
