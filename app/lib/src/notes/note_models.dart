@@ -72,6 +72,17 @@ class NoteReminder {
   DateTime? nextOccurrenceAfter(DateTime after) {
     return reminderOccurrencesAfter(this, after: after, count: 1).firstOrNull;
   }
+
+  DateTime? nextNotificationAfter(DateTime after) {
+    final next = nextOccurrenceAfter(after);
+    final snooze = snoozeUntil;
+    if (snooze != null &&
+        snooze.isAfter(after) &&
+        (next == null || snooze.isBefore(next))) {
+      return snooze;
+    }
+    return next;
+  }
 }
 
 class ReminderCycle {
@@ -277,12 +288,14 @@ List<DateTime> _cycledReminderOccurrencesAfter(
         cycleReminder,
         after,
         anchorDay: cycleStart.preferredDay,
+        wallTime: anchor,
       );
       while (occurrences.length < count) {
         final occurrence = _reminderOccurrenceAt(
           cycleReminder,
           occurrenceIndex,
           anchorDay: cycleStart.preferredDay,
+          wallTime: anchor,
         );
         if (!occurrence.isBefore(activeEnd.at)) {
           break;
@@ -352,6 +365,7 @@ int _firstReminderOccurrenceIndex(
   NoteReminder reminder,
   DateTime after, {
   int? anchorDay,
+  DateTime? wallTime,
 }) {
   final anchor = reminder.nextFireAt;
   if (anchor.isAfter(after)) {
@@ -375,6 +389,7 @@ int _firstReminderOccurrenceIndex(
     reminder,
     index,
     anchorDay: anchorDay,
+    wallTime: wallTime,
   ).isAfter(after)) {
     index++;
   }
@@ -385,10 +400,11 @@ DateTime _reminderOccurrenceAt(
   NoteReminder reminder,
   int index, {
   int? anchorDay,
+  DateTime? wallTime,
 }) {
   final anchor = reminder.nextFireAt;
   final interval = reminder.recurrenceInterval;
-  return switch (reminder.recurrence) {
+  final occurrence = switch (reminder.recurrence) {
     ReminderRecurrence.none => anchor,
     ReminderRecurrence.daily => _dateTimeLike(
       anchor,
@@ -413,6 +429,14 @@ DateTime _reminderOccurrenceAt(
       anchorDay: anchorDay,
     ),
   };
+  return wallTime == null
+      ? occurrence
+      : _dateTimeLike(
+          wallTime,
+          occurrence.year,
+          occurrence.month,
+          occurrence.day,
+        );
 }
 
 DateTime _monthlyOccurrence(
@@ -438,10 +462,12 @@ DateTime _yearlyOccurrence(DateTime anchor, int yearOffset, {int? anchorDay}) {
 }
 
 class _ScheduleCursor {
-  const _ScheduleCursor(this.at, this.preferredDay);
+  const _ScheduleCursor(this.at, this.preferredDay, [DateTime? wallTime])
+    : wallTime = wallTime ?? at;
 
   final DateTime at;
   final int preferredDay;
+  final DateTime wallTime;
 
   _ScheduleCursor add(ReminderDuration duration) {
     return switch (duration.unit) {
@@ -452,13 +478,17 @@ class _ScheduleCursor {
   }
 
   _ScheduleCursor _addDays(int days) {
-    final result = _dateTimeLike(at, at.year, at.month, at.day + days);
-    return _ScheduleCursor(result, result.day);
+    final result = _dateTimeLike(wallTime, at.year, at.month, at.day + days);
+    return _ScheduleCursor(result, result.day, wallTime);
   }
 
   _ScheduleCursor _addMonths(int months) {
     final result = _monthlyOccurrence(at, months, anchorDay: preferredDay);
-    return _ScheduleCursor(result, preferredDay);
+    return _ScheduleCursor(
+      _dateTimeLike(wallTime, result.year, result.month, result.day),
+      preferredDay,
+      wallTime,
+    );
   }
 }
 

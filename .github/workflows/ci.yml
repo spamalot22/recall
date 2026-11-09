@@ -89,6 +89,7 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+          TZ=America/New_York flutter test test/reminder_delivery_test.dart
       - name: Build debug APK
         working-directory: app
         run: flutter build apk --debug --dart-define=APP_VERSION=ci

@@ -3538,6 +3538,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final mood = _mood;
+    final nextNotification = _captureDraft().reminder?.nextNotificationAfter(
+      DateTime.now(),
+    );
     final moodColors = mood.resolve(Theme.of(context).colorScheme);
     final unavailable = _saving || _loading || _missing;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
@@ -3810,10 +3813,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                                       size: 20,
                                     ),
                                     label: Text(
-                                      _formatEditorDateTime(
-                                        context,
-                                        _reminderAt!,
-                                      ),
+                                      nextNotification == null
+                                          ? 'No upcoming notification'
+                                          : 'Next: ${_formatEditorDateTime(context, nextNotification)}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),

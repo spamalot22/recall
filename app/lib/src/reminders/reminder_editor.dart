@@ -51,7 +51,12 @@ Future<ReminderEditorSelection?> showReminderEditor(
       ? _CycleEndMode.cycles
       : _CycleEndMode.never;
   var cycleEndDate = reminderDateOnly(
-    initialCycle?.endAt ?? initialSelection.add(const Duration(days: 28)),
+    initialCycle?.endAt ??
+        DateTime(
+          initialSelection.year,
+          initialSelection.month,
+          initialSelection.day + 28,
+        ),
   );
   var maxCycles = initialCycle?.maxCycles ?? 3;
 
@@ -63,7 +68,7 @@ Future<ReminderEditorSelection?> showReminderEditor(
       builder: (sheetContext, setSheetState) {
         final now = currentTime();
         final today = reminderDateOnly(now);
-        final tomorrow = today.add(const Duration(days: 1));
+        final tomorrow = DateTime(today.year, today.month, today.day + 1);
         final selectedAt = combineReminderDateAndTime(
           selectedDate,
           selectedTime,
@@ -97,15 +102,13 @@ Future<ReminderEditorSelection?> showReminderEditor(
             !cycleEnabled ||
             cycleEndMode != _CycleEndMode.date ||
             !cycleEndAt.isBefore(selectedAt);
-        final hasFutureOccurrence = recurrence == ReminderRecurrence.none
-            ? selectedAt.isAfter(now)
-            : NoteReminder(
-                    nextFireAt: selectedAt,
-                    recurrence: recurrence,
-                    recurrenceInterval: recurrenceInterval,
-                    cycle: selectedCycle,
-                  ).nextOccurrenceAfter(now) !=
-                  null;
+        final nextNotification = NoteReminder(
+          nextFireAt: selectedAt,
+          recurrence: recurrence,
+          recurrenceInterval: recurrenceInterval,
+          cycle: selectedCycle,
+        ).nextNotificationAfter(now);
+        final hasFutureOccurrence = nextNotification != null;
         final isValid = cycleIsValid && hasFutureOccurrence;
         final theme = Theme.of(sheetContext);
         final localizations = MaterialLocalizations.of(sheetContext);
@@ -153,6 +156,16 @@ Future<ReminderEditorSelection?> showReminderEditor(
                     style: textTheme.titleLarge,
                   ),
                   const SizedBox(height: 20),
+                  if (selectedCycle != null &&
+                      cycleIsValid &&
+                      nextNotification != null) ...[
+                    Text(
+                      'Next notification: ${localizations.formatFullDate(nextNotification.toLocal())}, ${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(nextNotification.toLocal()), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(sheetContext))}',
+                      key: const Key('next-cycle-notification'),
+                      style: textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   if (cycleIsValid && !hasFutureOccurrence) ...[
                     Text(
                       'This schedule has no future alerts.',

@@ -92,6 +92,7 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+          TZ=America/New_York flutter test test/reminder_delivery_test.dart
       - name: Set up release keystore
         working-directory: app/android
         env:

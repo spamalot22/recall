@@ -6,6 +6,14 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recall_app/src/notes/note_models.dart';
 import 'package:recall_app/src/reminders/reminder_scheduler.dart';
+import 'package:recall_app/src/sync/sync_execution_lock.dart';
+
+class _ImmediateLock implements SyncExecutionLock {
+  const _ImmediateLock();
+
+  @override
+  Future<T> synchronized<T>(Future<T> Function() operation) => operation();
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +43,9 @@ void main() {
         debugDefaultTargetPlatformOverride = null;
         messenger.setMockMethodCallHandler(notificationsChannel, null);
       });
-      final scheduler = ReminderScheduler();
+      final scheduler = ReminderScheduler(
+        executionLock: const _ImmediateLock(),
+      );
       addTearDown(scheduler.dispose);
       final tomorrow = DateTime.now().toUtc().add(const Duration(days: 1));
       final start = DateTime.utc(
@@ -98,7 +108,7 @@ void main() {
       messenger.setMockMethodCallHandler(deviceChannel, null);
     });
 
-    final scheduler = ReminderScheduler();
+    final scheduler = ReminderScheduler(executionLock: const _ImmediateLock());
     addTearDown(scheduler.dispose);
     await scheduler.initialize();
 
@@ -150,7 +160,7 @@ void main() {
       messenger.setMockMethodCallHandler(deviceChannel, null);
     });
 
-    final scheduler = ReminderScheduler();
+    final scheduler = ReminderScheduler(executionLock: const _ImmediateLock());
     addTearDown(scheduler.dispose);
     final start = DateTime.now().add(const Duration(days: 1));
     await scheduler.scheduleNoteReminder(
@@ -217,7 +227,7 @@ void main() {
       messenger.setMockMethodCallHandler(deviceChannel, null);
     });
 
-    final scheduler = ReminderScheduler();
+    final scheduler = ReminderScheduler(executionLock: const _ImmediateLock());
     addTearDown(scheduler.dispose);
     await scheduler.scheduleNoteReminder(
       noteId: 'cycled-note',
@@ -286,7 +296,7 @@ void main() {
       messenger.setMockMethodCallHandler(deviceChannel, null);
     });
 
-    final scheduler = ReminderScheduler();
+    final scheduler = ReminderScheduler(executionLock: const _ImmediateLock());
     addTearDown(scheduler.dispose);
     final now = DateTime.now();
     await scheduler.scheduleNoteReminder(

@@ -660,7 +660,7 @@ class NotesRepository {
     if (cycle == null) {
       return '$repeat • $date';
     }
-    return '$repeat • ${cycle.label} • $date';
+    return 'Next: $date • $repeat • ${cycle.label}';
   }
 
   DateTime? _nextReminderOccurrence(NoteReminder? reminder) {
@@ -670,7 +670,7 @@ class NotesRepository {
     if (!reminder.repeats) {
       return reminder.nextFireAt;
     }
-    return reminder.nextOccurrenceAfter(DateTime.now());
+    return reminder.nextNotificationAfter(DateTime.now());
   }
 
   ({ReminderRecurrence recurrence, int interval, ReminderCycle? cycle})

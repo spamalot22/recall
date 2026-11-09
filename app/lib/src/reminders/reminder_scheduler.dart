@@ -10,6 +10,8 @@ import '../account/secure_account_store.dart';
 import '../data/local_database.dart';
 import '../notes/note_models.dart';
 import '../notes/notes_repository.dart';
+import '../sync/sync_execution_lock.dart';
+import 'reminder_alarm.dart';
 
 const _snoozeTenMinutesAction = 'snooze_10_minutes';
 const _snoozeOneHourAction = 'snooze_1_hour';
@@ -32,8 +34,8 @@ void reminderNotificationActionBackground(NotificationResponse response) {
 Future<void> _handleReminderNotificationAction(
   NotificationResponse response,
 ) async {
-  final noteId = response.payload;
-  if (noteId == null || noteId.isEmpty || noteId.length > 128) {
+  final noteId = ReminderAlarm.noteIdFromPayload(response.payload);
+  if (noteId == null) {
     return;
   }
   final snoozeDuration = switch (response.actionId) {
@@ -77,7 +79,13 @@ class ReminderScheduler {
   ReminderScheduler({
     FlutterLocalNotificationsPlugin? notifications,
     MethodChannel? deviceChannel,
+    SyncExecutionLock? executionLock,
+    DateTime Function()? now,
   }) : _notifications = notifications ?? FlutterLocalNotificationsPlugin(),
+       _executionLock =
+           executionLock ??
+           const FileSyncExecutionLock(name: 'recall-reminders'),
+       _now = now ?? DateTime.now,
        _deviceChannel =
            deviceChannel ?? const MethodChannel('app.recall.notes/device');
 
@@ -88,6 +96,8 @@ class ReminderScheduler {
 
   final FlutterLocalNotificationsPlugin _notifications;
   final MethodChannel _deviceChannel;
+  final SyncExecutionLock _executionLock;
+  final DateTime Function() _now;
   final StreamController<String> _openNoteRequests =
       StreamController<String>.broadcast();
 
@@ -106,42 +116,93 @@ class ReminderScheduler {
     required String body,
     required NoteReminder reminder,
     bool requestPermissions = true,
+  }) => _executionLock.synchronized(
+    () => _scheduleNoteReminder(
+      noteId: noteId,
+      title: title,
+      body: body,
+      reminder: reminder,
+      requestPermissions: requestPermissions,
+    ),
+  );
+
+  Future<void> _scheduleNoteReminder({
+    required String noteId,
+    required String title,
+    required String body,
+    required NoteReminder reminder,
+    required bool requestPermissions,
   }) async {
     await _ensureInitialized();
 
-    final now = DateTime.now();
-    if (!reminder.repeats && !reminder.nextFireAt.isAfter(now)) {
-      await cancelNoteReminder(noteId);
-      return;
-    }
-
+    final now = _now();
     final id = notificationIdForNote(noteId);
     final notificationTitle = _notificationTitle(title);
     final notificationBody = _notificationBody(body);
-    final details = _notificationDetails(body);
+    final details = _notificationDetails(body, noteId: noteId);
     final scheduleMode = await _androidScheduleMode(
       requestPermissions: requestPermissions,
     );
 
-    await _notifications.cancel(id: id);
-    await _cancelCustomOccurrences(noteId);
+    final rule = await ReminderAlarm.fingerprint(reminder, title, body);
+    final pending = await _notifications.pendingNotificationRequests();
+    final desiredIds = <int>{};
+    for (final notification in pending) {
+      final alarm = ReminderAlarm.parse(notification.payload);
+      if (alarm?.noteId == noteId &&
+          alarm?.rule == rule &&
+          !alarm!.at.isAfter(now) &&
+          now.difference(alarm.at) <= const Duration(days: 1)) {
+        desiredIds.add(notification.id);
+      }
+    }
+    if (!reminder.repeats && !reminder.nextFireAt.isAfter(now)) {
+      if (now.difference(reminder.nextFireAt) <= const Duration(days: 1)) {
+        for (final notification in pending) {
+          if (notification.id == id && notification.payload == noteId) {
+            desiredIds.add(id);
+          }
+        }
+      }
+      await _removeObsoleteAlarms(noteId, pending, desiredIds);
+      return;
+    }
     if (_usesRollingOccurrences(reminder)) {
       final occurrences = reminderOccurrencesAfter(
         reminder,
         after: now,
         count: _customOccurrenceWindow,
       );
-      for (var index = 0; index < occurrences.length; index++) {
-        await _zonedScheduleWithFallback(
-          id: customOccurrenceNotificationIdForNote(noteId, index),
-          title: notificationTitle,
-          body: notificationBody,
-          scheduledDate: _toScheduledDate(occurrences[index]),
-          notificationDetails: details,
-          scheduleMode: scheduleMode,
-          payload: noteId,
-        );
+      final previousIds = pending.map((entry) => entry.id).toSet();
+      final introducedIds = <int>[];
+      try {
+        for (final occurrence in occurrences) {
+          final alarmId = notificationIdForNote(
+            'occurrence:$noteId:${occurrence.toUtc().millisecondsSinceEpoch}',
+          );
+          await _zonedScheduleWithFallback(
+            id: alarmId,
+            title: notificationTitle,
+            body: notificationBody,
+            scheduledDate: _toScheduledDate(occurrence),
+            notificationDetails: details,
+            scheduleMode: scheduleMode,
+            payload: ReminderAlarm(noteId, occurrence, rule).payload,
+          );
+          desiredIds.add(alarmId);
+          if (!previousIds.contains(alarmId)) introducedIds.add(alarmId);
+        }
+      } on Object {
+        for (final alarmId in introducedIds) {
+          try {
+            await _notifications.cancel(id: alarmId);
+          } on Object {
+            // Keep the scheduling failure visible for the next repair attempt.
+          }
+        }
+        rethrow;
       }
+      await _removeObsoleteAlarms(noteId, pending, desiredIds);
       return;
     }
 
@@ -149,6 +210,7 @@ class ReminderScheduler {
         ? reminder.nextOccurrenceAfter(now)
         : reminder.nextFireAt;
     if (scheduledAt == null) {
+      await _removeObsoleteAlarms(noteId, pending, desiredIds);
       return;
     }
     await _zonedScheduleWithFallback(
@@ -159,18 +221,53 @@ class ReminderScheduler {
       notificationDetails: details,
       scheduleMode: scheduleMode,
       matchDateTimeComponents: _matchComponentsFor(reminder.recurrence),
-      payload: noteId,
+      payload: ReminderAlarm(noteId, scheduledAt, rule).payload,
     );
+    desiredIds.add(id);
+    await _removeObsoleteAlarms(noteId, pending, desiredIds);
   }
 
-  Future<void> cancelNoteReminder(String noteId) async {
+  Future<void> _removeObsoleteAlarms(
+    String noteId,
+    List<PendingNotificationRequest> pending,
+    Set<int> desiredIds,
+  ) async {
+    for (final notification in pending) {
+      if (ReminderAlarm.noteIdFromPayload(notification.payload) == noteId &&
+          notification.id != snoozeNotificationIdForNote(noteId) &&
+          !desiredIds.contains(notification.id)) {
+        await _notifications.cancel(id: notification.id);
+      }
+    }
+  }
+
+  Future<void> cancelNoteReminder(String noteId) =>
+      _executionLock.synchronized(() => _cancelNoteReminder(noteId));
+
+  Future<void> _cancelNoteReminder(String noteId) async {
     await _ensureInitialized();
     await _notifications.cancel(id: notificationIdForNote(noteId));
     await _cancelCustomOccurrences(noteId);
-    await cancelSnooze(noteId);
+    final pending = await _notifications.pendingNotificationRequests();
+    for (final notification in pending) {
+      if (ReminderAlarm.noteIdFromPayload(notification.payload) == noteId) {
+        await _notifications.cancel(id: notification.id);
+      }
+    }
+    await _cancelSnooze(noteId);
+    final active = await _notifications.getActiveNotifications();
+    for (final notification in active) {
+      if (notification.groupKey == 'recall-note:$noteId' &&
+          notification.id != null) {
+        await _notifications.cancel(id: notification.id!);
+      }
+    }
   }
 
-  Future<void> cancelSnooze(String noteId) async {
+  Future<void> cancelSnooze(String noteId) =>
+      _executionLock.synchronized(() => _cancelSnooze(noteId));
+
+  Future<void> _cancelSnooze(String noteId) async {
     await _ensureInitialized();
     await _notifications.cancel(id: snoozeNotificationIdForNote(noteId));
   }
@@ -178,12 +275,25 @@ class ReminderScheduler {
   Future<void> scheduleSnooze(
     ScheduledNoteReminder schedule, {
     bool requestPermissions = true,
+  }) => _executionLock.synchronized(
+    () => _scheduleSnooze(schedule, requestPermissions: requestPermissions),
+  );
+
+  Future<void> _scheduleSnooze(
+    ScheduledNoteReminder schedule, {
+    required bool requestPermissions,
   }) async {
     await _ensureInitialized();
     final snoozeUntil = schedule.reminder.snoozeUntil;
     final id = snoozeNotificationIdForNote(schedule.noteId);
-    await _notifications.cancel(id: id);
-    if (snoozeUntil == null || !snoozeUntil.isAfter(DateTime.now())) {
+    if (snoozeUntil == null) {
+      await _notifications.cancel(id: id);
+      return;
+    }
+    if (!snoozeUntil.isAfter(_now())) {
+      if (_now().difference(snoozeUntil) > const Duration(days: 1)) {
+        await _notifications.cancel(id: id);
+      }
       return;
     }
 
@@ -192,7 +302,10 @@ class ReminderScheduler {
       title: _notificationTitle(schedule.title),
       body: _notificationBody(schedule.body),
       scheduledDate: _toScheduledDate(snoozeUntil),
-      notificationDetails: _notificationDetails(schedule.body),
+      notificationDetails: _notificationDetails(
+        schedule.body,
+        noteId: schedule.noteId,
+      ),
       scheduleMode: await _androidScheduleMode(
         requestPermissions: requestPermissions,
       ),
@@ -203,41 +316,42 @@ class ReminderScheduler {
   Future<void> reconcileNoteReminders(
     List<ScheduledNoteReminder> schedules, {
     bool requestPermissions = true,
+  }) => _executionLock.synchronized(
+    () => _reconcileNoteReminders(
+      schedules,
+      requestPermissions: requestPermissions,
+    ),
+  );
+
+  Future<void> _reconcileNoteReminders(
+    List<ScheduledNoteReminder> schedules, {
+    required bool requestPermissions,
   }) async {
     await _ensureInitialized();
-    final desiredIds = <int>{};
-    for (final schedule in schedules) {
-      if (_usesRollingOccurrences(schedule.reminder)) {
-        for (var index = 0; index < _customOccurrenceWindow; index++) {
-          desiredIds.add(
-            customOccurrenceNotificationIdForNote(schedule.noteId, index),
-          );
-        }
-      } else {
-        desiredIds.add(notificationIdForNote(schedule.noteId));
-      }
-      final snoozeUntil = schedule.reminder.snoozeUntil;
-      if (snoozeUntil != null && snoozeUntil.isAfter(DateTime.now())) {
-        desiredIds.add(snoozeNotificationIdForNote(schedule.noteId));
-      }
-    }
+    final desiredNotes = schedules.map((s) => s.noteId).toSet();
     final pending = await _notifications.pendingNotificationRequests();
     for (final notification in pending) {
-      if (notification.payload != null &&
-          !desiredIds.contains(notification.id)) {
+      final noteId = ReminderAlarm.noteIdFromPayload(notification.payload);
+      if (noteId != null && !desiredNotes.contains(noteId)) {
         await _notifications.cancel(id: notification.id);
       }
     }
+    Object? failure;
     for (final schedule in schedules) {
-      await scheduleNoteReminder(
-        noteId: schedule.noteId,
-        title: schedule.title,
-        body: schedule.body,
-        reminder: schedule.reminder,
-        requestPermissions: requestPermissions,
-      );
-      await scheduleSnooze(schedule, requestPermissions: requestPermissions);
+      try {
+        await _scheduleNoteReminder(
+          noteId: schedule.noteId,
+          title: schedule.title,
+          body: schedule.body,
+          reminder: schedule.reminder,
+          requestPermissions: requestPermissions,
+        );
+        await _scheduleSnooze(schedule, requestPermissions: requestPermissions);
+      } on Object catch (error) {
+        failure ??= error;
+      }
     }
+    if (failure != null) throw failure;
   }
 
   int notificationIdForNote(String noteId) {
@@ -318,11 +432,8 @@ class ReminderScheduler {
     if (actionId != null && actionId.isNotEmpty) {
       return;
     }
-    final noteId = response.payload;
-    if (noteId != null &&
-        noteId.isNotEmpty &&
-        noteId.length <= 128 &&
-        !_openNoteRequests.isClosed) {
+    final noteId = ReminderAlarm.noteIdFromPayload(response.payload);
+    if (noteId != null && !_openNoteRequests.isClosed) {
       _openNoteRequests.add(noteId);
     }
   }
@@ -418,7 +529,10 @@ class ReminderScheduler {
     };
   }
 
-  NotificationDetails _notificationDetails(String body) {
+  NotificationDetails _notificationDetails(
+    String body, {
+    required String noteId,
+  }) {
     final expandedBody = _limitNotificationText(body.trim(), 1000);
     return NotificationDetails(
       android: AndroidNotificationDetails(
@@ -429,6 +543,7 @@ class ReminderScheduler {
         priority: Priority.high,
         category: AndroidNotificationCategory.reminder,
         visibility: NotificationVisibility.private,
+        groupKey: 'recall-note:$noteId',
         styleInformation: expandedBody.isEmpty
             ? null
             : BigTextStyleInformation(expandedBody),
