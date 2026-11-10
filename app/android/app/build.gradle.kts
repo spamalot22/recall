@@ -75,7 +75,7 @@ flutter {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.17.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.24.1")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
